@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-ENV PORT=8080  # Koyeb’in expose ettiği port
+ENV PORT=8080
 
 EXPOSE 8080
 
