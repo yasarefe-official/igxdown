@@ -13,11 +13,11 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ENV’lerden al
+# Env’den al ngl
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 PORT = int(os.environ.get("PORT", "8080"))
 
-# Instaloader (sadece video_url çekmek için)
+# Instaloader config
 L = instaloader.Instaloader(
     save_metadata=False,
     download_videos=False,
@@ -30,17 +30,17 @@ bot_app = ApplicationBuilder().token(TOKEN).build()
 
 # Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Yo dawg, reel linkini at ts, direkt getiririm.")
+    await update.message.reply_text("Yo dawg, reel linkini at ts, beni test et 🔥")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     m = re.search(r"/reel/([^/?]+)", txt)
     if not m:
-        await update.message.reply_text("Geçerli reel URL’si at ts.")
+        await update.message.reply_text("Geçerli reel URL’si at ts 🙏")
         return
 
     sc = m.group(1)
-    await update.message.reply_text("Link çekiliyor…")
+    await update.message.reply_text("Link çekiliyor… crash out etme 😂")
 
     try:
         post = instaloader.Post.from_shortcode(L.context, sc)
@@ -51,7 +51,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             supports_streaming=True,
         )
     except Exception as e:
-        await update.message.reply_text(f"Hata: {e}")
+        await update.message.reply_text(f"Hata: {e} 💔")
 
 # Kayıt et
 bot_app.add_handler(CommandHandler("start", start_cmd))
@@ -62,16 +62,15 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def startup_event():
-    # Telegram bot’u başlat
+    # Bot’u initialize et
     await bot_app.initialize()
-    # polling’i background task olarak ata
-    asyncio.create_task(bot_app.updater.start_polling())
+    # run_polling’i background’da koştur
+    asyncio.create_task(bot_app.run_polling())
 
 @app.get("/")
 async def health():
     return {"status": "ok"}
 
-# uvicorn ile run edilince burayı kullanacak
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=PORT)
