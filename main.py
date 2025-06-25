@@ -1,8 +1,9 @@
 import os
 import re
-import threading
 import instaloader
-from flask import Flask
+import asyncio
+
+from fastapi import FastAPI
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,9 +13,11 @@ from telegram.ext import (
     ContextTypes,
 )
 
+# ENV’lerden al
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 PORT = int(os.environ.get("PORT", "8080"))
 
+# Instaloader (sadece video_url çekmek için)
 L = instaloader.Instaloader(
     save_metadata=False,
     download_videos=False,
@@ -22,24 +25,22 @@ L = instaloader.Instaloader(
     compress_json=False,
 )
 
-app = Flask(__name__)
+# Telegram bot application
+bot_app = ApplicationBuilder().token(TOKEN).build()
 
-@app.route("/", methods=["GET"])
-def health():
-    return "OK", 200
-
+# Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Yo dawg, reel linkini at ts, whip gibi getiririm 😭🔥")
+    await update.message.reply_text("Yo dawg, reel linkini at ts, direkt getiririm.")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     m = re.search(r"/reel/([^/?]+)", txt)
     if not m:
-        await update.message.reply_text("Geçerli reel URL’si at ts 😭")
+        await update.message.reply_text("Geçerli reel URL’si at ts.")
         return
 
     sc = m.group(1)
-    await update.message.reply_text("Link çekiliyor crash out etme diye 💀")
+    await update.message.reply_text("Link çekiliyor…")
 
     try:
         post = instaloader.Post.from_shortcode(L.context, sc)
@@ -50,28 +51,27 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             supports_streaming=True,
         )
     except Exception as e:
-        await update.message.reply_text(f"Hata oluştu: {e} 😭")
+        await update.message.reply_text(f"Hata: {e}")
 
-def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
+# Kayıt et
+bot_app.add_handler(CommandHandler("start", start_cmd))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
-def main():
-    from asyncio import run
-    import asyncio
+# FastAPI app
+app = FastAPI()
 
-    # Flask thread’de run
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
+@app.on_event("startup")
+async def startup_event():
+    # Telegram bot’u başlat
+    await bot_app.initialize()
+    # polling’i background task olarak ata
+    asyncio.create_task(bot_app.updater.start_polling())
 
-    # Telegram bot’u async olarak run et
-    async def run_bot():
-        app_bot = ApplicationBuilder().token(TOKEN).build()
-        app_bot.add_handler(CommandHandler("start", start_cmd))
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-        await app_bot.run_polling()
+@app.get("/")
+async def health():
+    return {"status": "ok"}
 
-    run(run_bot())
-
+# uvicorn ile run edilince burayı kullanacak
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT)
