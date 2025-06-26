@@ -16,9 +16,8 @@ PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 APIFY_API_TOKEN = os.environ.get("APIFY_API_TOKEN") # Apify token'ınız
 
-# --- API Bilgileri (DOĞRU VE GÜNCEL ADRES) ---
-# Popüler ve bakımı yapılan Instagram Scraper'ı kullanıyoruz.
-APIFY_ACTOR_URL = "https://api.apify.com/v2/acts/jaroslav-krovak~instagram-post-scraper/run-sync-get-dataset-items"
+# --- API BİLGİLERİ (SİZİN ÖNERDİĞİNİZ DOĞRU VE SPESİFİK ARAÇ) ---
+APIFY_ACTOR_URL = "https://api.apify.com/v2/acts/scrapearchitect~instagram-reels-downloader/run-sync-get-dataset-items"
 
 # --- Bot Kurulumu ---
 bot_app = ApplicationBuilder().token(TOKEN).build()
@@ -31,15 +30,14 @@ async def normalize_instagram_url(url: str):
     return f"https://www.instagram.com/reel/{match.group(1)}/" if match else None
 
 async def download_with_apify(url: str):
-    """Apify API ile video indirmeyi dener (Doğru Actor ile)."""
+    """Apify API ile video indirmeyi dener (Sizin önerdiğiniz araçla)."""
     if not APIFY_API_TOKEN:
         return None, "Bot sahibi Apify API anahtarını yapılandırmamış."
 
-    print(f"Starting download with correct Apify Actor for: {url}")
-    # API isteği için doğru formatı hazırlıyoruz.
+    print(f"Starting download with 'scrapearchitect' Actor for: {url}")
     params = {'token': APIFY_API_TOKEN}
-    # Bu actor, linkleri 'directUrls' altında bir dizi olarak bekliyor.
-    payload = {"directUrls": [url]}
+    # Bu actor, linkleri 'post_urls' altında bir dizi olarak bekliyor.
+    payload = {"post_urls": [url]}
     timeout = aiohttp.ClientTimeout(total=150)
 
     try:
@@ -50,17 +48,17 @@ async def download_with_apify(url: str):
                     data = await response.json()
                     if data and isinstance(data, list) and len(data) > 0:
                         item = data[0]
-                        # Bu actor, video linkini doğrudan 'videoUrl' alanında veriyor.
-                        video_link = item.get("videoUrl")
+                        # Bu actor, video linkini 'download_url' alanında veriyor.
+                        video_link = item.get("download_url")
                         if video_link:
-                            print("Apify successful, got videoUrl.")
+                            print("Apify successful, got download_url.")
                             return video_link, None
                     return None, "Apify'dan gelen yanıtta video linki bulunamadı. Link özel veya geçersiz olabilir."
                 else:
                     error_text = await response.text()
                     return None, f"Apify servisi {response.status} hatası döndü. Detay: {error_text[:200]}"
     except asyncio.TimeoutError:
-         return None, "Apify servisinden yanıt alınamadı (zaman aşımı). Lütfen birkaç dakika sonra tekrar deneyin."
+         return None, "Apify servisinden yanıt alınamadı (zaman aşımı)."
     except Exception as e:
         print(f"A critical error occurred in download_with_apify: {e}")
         return None, "Apify servisinde beklenmedik bir hata oluştu."
@@ -124,7 +122,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(video_path)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Stabil Instagram Video İndirici v4.3 (Doğru API)\n\nBota bir Instagram linki gönderin, gerisini o halleder.")
+    await update.message.reply_text("🚀 Stabil Instagram Video İndirici v4.4 (Pro)\n\nBota bir Instagram linki gönderin, gerisini o halleder.")
 
 # Handler'ları ve FastAPI uygulamasını ayarla
 bot_app.add_handler(CommandHandler("start", start_cmd))
@@ -136,7 +134,7 @@ async def lifespan(app: FastAPI):
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
-    print(f"🚀 Bot v4.3 (Correct Apify Actor) started! Webhook: {webhook_url}")
+    print(f"🚀 Bot v4.4 (scrapearchitect Actor) started! Webhook: {webhook_url}")
     yield
     await bot_app.stop()
     await bot_app.shutdown()
