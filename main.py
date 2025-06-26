@@ -31,11 +31,26 @@ bot_app = ApplicationBuilder().token(TOKEN).build()
 last_request_time = 0
 REQUEST_DELAY = 2  # saniye
 
-# Cobalt.tools API endpoints
+# Güncellenmiş Cobalt.tools API endpoints
 COBALT_INSTANCES = [
-    "https://api.cobalt.tools",
-    "https://co.wuk.sh",
-    "https://cobalt-api.kwiateusz.co.uk"
+    "https://api.cobalt.tools",  # Ana API
+    "https://co.wuk.sh",         # Alternatif endpoint
+    # cobalt-api.kwiateusz.co.uk kaldırıldı - çalışmıyor
+]
+
+# Alternatif API servisleri (yedek olarak)
+ALTERNATIVE_APIS = [
+    {
+        "name": "cobalt_fallback",
+        "url": "https://cobalt.tools/api/json",
+        "headers": {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://cobalt.tools/",
+            "Origin": "https://cobalt.tools"
+        }
+    }
 ]
 
 def get_random_cobalt_instance():
@@ -64,6 +79,26 @@ async def normalize_instagram_url(url):
         print(f"URL normalize error: {e}")
         return None
 
+async def test_cobalt_instance(instance_url):
+    """Cobalt instance'ını test et"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
+        }
+        
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            # Basit bir ping test et
+            test_url = f"{instance_url}/api/serverInfo" if "/api" in instance_url else f"{instance_url}/serverInfo"
+            async with session.get(test_url) as response:
+                return response.status == 200
+    except:
+        return False
+
 async def download_with_cobalt(url):
     """Cobalt.tools API ile video indir"""
     try:
@@ -74,13 +109,18 @@ async def download_with_cobalt(url):
         
         print(f"Using Cobalt to download: {normalized_url}")
         
-        # Cobalt API request
-        for attempt in range(3):  # 3 instance dene
+        # Ana Cobalt API'leri dene
+        for attempt in range(len(COBALT_INSTANCES)):
             try:
-                cobalt_instance = get_random_cobalt_instance()
+                cobalt_instance = COBALT_INSTANCES[attempt]
                 print(f"Trying Cobalt instance: {cobalt_instance}")
                 
-                # API request payload
+                # Instance'ı test et
+                if not await test_cobalt_instance(cobalt_instance):
+                    print(f"Instance {cobalt_instance} not responding")
+                    continue
+                
+                # API request payload (güncellenmiş format)
                 payload = {
                     "url": normalized_url,
                     "vCodec": "h264",
@@ -92,42 +132,58 @@ async def download_with_cobalt(url):
                     "isAudioOnly": False,
                     "isAudioMuted": False,
                     "dubLang": False,
-                    "disableMetadata": False
+                    "disableMetadata": False,
+                    "twitterGif": False
                 }
                 
                 headers = {
                     "Accept": "application/json",
                     "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Origin": "https://cobalt.tools",
+                    "Referer": "https://cobalt.tools/"
                 }
                 
                 timeout = aiohttp.ClientTimeout(total=60)
                 
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     # API'ye request gönder
+                    api_endpoint = f"{cobalt_instance}/api/json"
                     async with session.post(
-                        f"{cobalt_instance}/api/json",
+                        api_endpoint,
                         json=payload,
                         headers=headers
                     ) as response:
                         
+                        print(f"Response status: {response.status}")
+                        response_text = await response.text()
+                        print(f"Response: {response_text[:500]}")
+                        
                         if response.status == 200:
-                            data = await response.json()
-                            print(f"Cobalt response: {data}")
-                            
-                            if data.get("status") == "success":
-                                download_url = data.get("url")
-                                if download_url:
-                                    return download_url, None
-                            elif data.get("status") == "error":
-                                error_msg = data.get("text", "Unknown error")
-                                print(f"Cobalt error: {error_msg}")
-                                if "rate limit" in error_msg.lower():
-                                    await asyncio.sleep(2)
-                                    continue
-                                return None, error_msg
+                            try:
+                                data = json.loads(response_text)
+                                print(f"Cobalt response: {data}")
+                                
+                                if data.get("status") == "success":
+                                    download_url = data.get("url")
+                                    if download_url:
+                                        return download_url, None
+                                elif data.get("status") == "error":
+                                    error_msg = data.get("text", "Unknown error")
+                                    print(f"Cobalt error: {error_msg}")
+                                    if "rate limit" in error_msg.lower():
+                                        await asyncio.sleep(5)
+                                        continue
+                                    return None, error_msg
+                            except json.JSONDecodeError:
+                                print("Invalid JSON response")
+                                continue
+                        elif response.status == 429:
+                            print("Rate limited, waiting...")
+                            await asyncio.sleep(10)
+                            continue
                         else:
-                            print(f"Cobalt HTTP {response.status}: {await response.text()}")
+                            print(f"HTTP {response.status}: {response_text}")
                             
             except asyncio.TimeoutError:
                 print(f"Cobalt instance timeout: {cobalt_instance}")
@@ -136,7 +192,37 @@ async def download_with_cobalt(url):
                 print(f"Cobalt instance error: {e}")
                 continue
         
-        return None, "All Cobalt instances failed"
+        # Alternatif API'leri dene
+        print("Trying alternative APIs...")
+        for alt_api in ALTERNATIVE_APIS:
+            try:
+                print(f"Trying alternative API: {alt_api['name']}")
+                
+                payload = {
+                    "url": normalized_url,
+                    "vQuality": "720"
+                }
+                
+                timeout = aiohttp.ClientTimeout(total=60)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        alt_api["url"],
+                        json=payload,
+                        headers=alt_api["headers"]
+                    ) as response:
+                        
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get("status") == "success":
+                                download_url = data.get("url")
+                                if download_url:
+                                    return download_url, None
+                        
+            except Exception as e:
+                print(f"Alternative API error: {e}")
+                continue
+        
+        return None, "All download services are currently unavailable"
         
     except Exception as e:
         print(f"Cobalt download error: {e}")
@@ -148,14 +234,15 @@ async def download_video_from_url(video_url, output_path):
         print(f"Downloading video from: {video_url[:100]}...")
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Sec-Fetch-Dest': 'video',
             'Sec-Fetch-Mode': 'no-cors',
-            'Sec-Fetch-Site': 'cross-site'
+            'Sec-Fetch-Site': 'cross-site',
+            'Referer': 'https://cobalt.tools/'
         }
         
         timeout = aiohttp.ClientTimeout(total=120)
@@ -225,23 +312,24 @@ async def download_instagram_video_cobalt(url):
 # Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 Instagram Video İndirici Bot v3.0\n\n"
-        "⚡ Cobalt.tools API ile güçlendirildi!\n\n"
+        "🚀 Instagram Video İndirici Bot v3.1\n\n"
+        "⚡ Geliştirilmiş Cobalt.tools entegrasyonu!\n\n"
         "📱 Desteklenen formatlar:\n"
         "• instagram.com/reel/...\n"
         "• instagram.com/p/...\n"
         "• instagram.com/tv/...\n\n"
-        "✨ Özellikler:\n"
-        "🔥 Yüksek başarı oranı\n"
-        "🛡️ Anti-ban koruması\n"
-        "⚡ Hızlı indirme\n"
-        "📺 HD kalite desteği\n\n"
+        "✨ Yeni özellikler:\n"
+        "🔥 İyileştirilmiş hata işleme\n"
+        "🛡️ Gelişmiş anti-ban koruması\n"
+        "⚡ Daha hızlı indirme\n"
+        "📺 HD kalite desteği\n"
+        "🔄 Alternatif API desteği\n\n"
         "💡 Bir Instagram linki gönderin ve indirmeye başlayalım!"
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📖 Yardım Menüsü\n\n"
+        "📖 Yardım Menüsü v3.1\n\n"
         "🔧 Komutlar:\n"
         "/start - Botu başlat\n"
         "/help - Bu yardım menüsü\n"
@@ -253,50 +341,49 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Notlar:\n"
         "• Özel hesap videoları indirilemez\n"
         "• Maksimum dosya boyutu: 50MB\n"
-        "• Rate limit: 2 saniye bekleme\n\n"
+        "• Rate limit: 2 saniye bekleme\n"
+        "• Cobalt.tools servisi bazen yavaş olabilir\n\n"
         "🆘 Sorun mu yaşıyorsunuz?\n"
-        "Bot yeniden başlatılıyor olabilir. Birkaç saniye bekleyin."
+        "Servis geçici olarak yavaş olabilir. Birkaç dakika bekleyip tekrar deneyin."
     )
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bot durumunu göster"""
     try:
-        # Test Cobalt instance
-        test_url = "https://www.instagram.com/reel/test/"
-        cobalt_instance = get_random_cobalt_instance()
+        working_instances = 0
+        total_instances = len(COBALT_INSTANCES)
         
-        start_time = time.time()
+        status_text = f"📊 Bot Durumu v3.1\n\n🤖 Bot: 🟢 Aktif\n"
         
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(f"{cobalt_instance}/api/serverInfo") as response:
-                if response.status == 200:
-                    cobalt_status = "🟢 Online"
-                    response_time = int((time.time() - start_time) * 1000)
+        # Cobalt instance'larını test et
+        for instance in COBALT_INSTANCES:
+            try:
+                if await test_cobalt_instance(instance):
+                    working_instances += 1
+                    status_text += f"✅ {instance.replace('https://', '')}: Çalışıyor\n"
                 else:
-                    cobalt_status = "🟡 Yavaş"
-                    response_time = int((time.time() - start_time) * 1000)
+                    status_text += f"❌ {instance.replace('https://', '')}: Yavaş/Kapalı\n"
+            except:
+                status_text += f"❌ {instance.replace('https://', '')}: Test edilemiyor\n"
         
-        status_text = (
-            f"📊 Bot Durumu\n\n"
-            f"🤖 Bot: 🟢 Aktif\n"
-            f"⚡ Cobalt API: {cobalt_status}\n"
-            f"⏱️ Yanıt süresi: {response_time}ms\n"
-            f"🔄 Son istek: {time.time() - last_request_time:.1f}s önce\n"
-            f"🛡️ Rate limit: {REQUEST_DELAY}s\n"
-            f"📍 Aktif instance: {len(COBALT_INSTANCES)} adet\n\n"
-            f"✅ Sistem çalışıyor!"
-        )
+        status_text += f"\n📊 API Durumu: {working_instances}/{total_instances} aktif\n"
+        status_text += f"🔄 Son istek: {time.time() - last_request_time:.1f}s önce\n"
+        status_text += f"🛡️ Rate limit: {REQUEST_DELAY}s\n"
+        
+        if working_instances > 0:
+            status_text += f"\n✅ Sistem çalışıyor!"
+        else:
+            status_text += f"\n⚠️ Tüm API'ler yavaş, daha sonra deneyin"
         
         await update.message.reply_text(status_text)
         
     except Exception as e:
         await update.message.reply_text(
-            f"📊 Bot Durumu\n\n"
+            f"📊 Bot Durumu v3.1\n\n"
             f"🤖 Bot: 🟢 Aktif\n"
-            f"⚡ Cobalt API: 🔴 Test edilemiyor\n"
-            f"❌ Hata: {str(e)[:100]}\n\n"
-            f"💡 Yine de deneyin, çalışıyor olabilir!"
+            f"⚡ API Test: ❌ Hata\n"
+            f"🔧 Detay: {str(e)[:50]}...\n\n"
+            f"💡 Bot çalışıyor, API testinde sorun var"
         )
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,13 +419,14 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Progress mesajı
     progress_msg = await update.message.reply_text(
         "🔄 Video indiriliyor...\n"
-        "⚡ Cobalt.tools API kullanılıyor\n"
-        "⏱️ Bu 15-30 saniye sürebilir"
+        "⚡ Geliştirilmiş Cobalt API kullanılıyor\n"
+        "⏱️ Bu 15-60 saniye sürebilir\n"
+        "🔍 Alternatif servisler deneniyor..."
     )
     
     try:
         # Cobalt ile video indir
-        await progress_msg.edit_text("🔍 Video kaynağı bulunuyor...")
+        await progress_msg.edit_text("🔍 Video kaynağı aranıyor...")
         
         video_path, error = await download_instagram_video_cobalt(normalized_url)
         
@@ -368,7 +456,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             size_mb = file_size / (1024 * 1024)
             caption = (
                 f"📱 Instagram Video İndirildi ✅\n"
-                f"⚡ Cobalt.tools ile indirildi\n"
+                f"⚡ Geliştirilmiş Cobalt.tools v3.1\n"
                 f"📊 Boyut: {size_mb:.1f} MB\n"
                 f"🔗 Kaynak: Instagram\n\n"
                 f"🤖 @{context.bot.username} tarafından indirildi"
@@ -393,7 +481,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Send error: {send_error}")
                 await progress_msg.edit_text(
                     "❌ Video gönderilirken hata oluştu!\n"
-                    "Dosya çok büyük olabilir."
+                    "Dosya çok büyük olabilir veya Telegram problemi."
                 )
             
             # Geçici dosyayı sil
@@ -407,13 +495,15 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_error = "Bilinmeyen hata"
             if error:
                 if "rate limit" in error.lower():
-                    user_error = "Rate limit aşıldı. Birkaç dakika bekleyin."
-                elif "not available" in error.lower():
+                    user_error = "Rate limit aşıldı. 5-10 dakika bekleyin."
+                elif "not available" in error.lower() or "unavailable" in error.lower():
                     user_error = "Video mevcut değil veya özel hesap."
                 elif "invalid" in error.lower():
                     user_error = "Geçersiz URL formatı."
                 elif "timeout" in error.lower():
-                    user_error = "Bağlantı zaman aşımı."
+                    user_error = "Bağlantı zaman aşımı - servis yavaş."
+                elif "currently unavailable" in error.lower():
+                    user_error = "Cobalt servisleri şu anda yavaş/kapalı."
                 else:
                     user_error = error[:100]
             
@@ -422,11 +512,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔍 Hata: {user_error}\n\n"
                 f"💡 Çözüm önerileri:\n"
                 f"• Linki tekrar kontrol edin 📋\n"
-                f"• 2-3 dakika bekleyip tekrar deneyin ⏰\n"
+                f"• 5-10 dakika bekleyip tekrar deneyin ⏰\n"
                 f"• Video özel hesapta olmadığından emin olun 🔒\n"
-                f"• /status ile bot durumunu kontrol edin 📊\n\n"
-                f"🆘 Sorun devam ederse /help yazın"
-            )
+ )
             
     except Exception as e:
         error_msg = str(e)
@@ -435,11 +523,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Beklenmeyen hata oluştu!\n\n"
             f"🔧 Hata: {error_msg[:100]}...\n\n"
             f"💡 Bu geçici bir sorun olabilir.\n"
-            f"Birkaç dakika bekleyip tekrar deneyin.\n\n"
-            f"🆘 /status ile bot durumunu kontrol edin"
+            f"5-10 dakika bekleyip tekrar deneyin.\n\n"
+            f"🔄 Cobalt servisleri bazen yavaş olabilir\n"
+            f"📊 /status ile durumu kontrol edin"
         )
 
-# Handlers kayıt
+# Handler'ları kaydet
 bot_app.add_handler(CommandHandler("start", start_cmd))
 bot_app.add_handler(CommandHandler("help", help_cmd))
 bot_app.add_handler(CommandHandler("status", status_cmd))
@@ -457,14 +546,11 @@ async def lifespan(app: FastAPI):
     
     for instance in COBALT_INSTANCES:
         try:
-            timeout = aiohttp.ClientTimeout(total=5)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(f"{instance}/api/serverInfo") as response:
-                    if response.status == 200:
-                        working_instances.append(instance)
-                        print(f"✅ {instance} - Working")
-                    else:
-                        print(f"⚠️ {instance} - Status {response.status}")
+            if await test_cobalt_instance(instance):
+                working_instances.append(instance)
+                print(f"✅ {instance} - Working")
+            else:
+                print(f"⚠️ {instance} - Not responding or slow")
         except Exception as e:
             print(f"❌ {instance} - Error: {e}")
     
@@ -483,7 +569,7 @@ async def lifespan(app: FastAPI):
         print("⚠️ WEBHOOK_URL not set")
     
     await bot_app.start()
-    print("🚀 Instagram Video Downloader Bot v3.0 (Cobalt-powered) started!")
+    print("🚀 Instagram Video Downloader Bot v3.1 (Enhanced Cobalt) started!")
     
     yield
     
@@ -499,15 +585,19 @@ app = FastAPI(lifespan=lifespan)
 async def health():
     return {
         "status": "ok", 
-        "message": "Instagram Video Downloader Bot v3.0 (Cobalt-powered)",
+        "message": "Instagram Video Downloader Bot v3.1 (Enhanced Cobalt)",
+        "version": "3.1",
         "features": [
-            "Cobalt.tools API integration",
-            "High success rate",
-            "Multiple instance support",
-            "Rate limiting",
-            "HD quality support"
+            "Enhanced Cobalt.tools API integration",
+            "Improved error handling",
+            "Multiple instance support with testing",
+            "Alternative API fallback",
+            "Advanced rate limiting",
+            "HD quality support",
+            "Better bot protection bypass"
         ],
-        "cobalt_instances": len(COBALT_INSTANCES)
+        "cobalt_instances": len(COBALT_INSTANCES),
+        "alternative_apis": len(ALTERNATIVE_APIS)
     }
 
 @app.post("/webhook")
@@ -552,37 +642,7 @@ async def get_webhook_info():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-@app.get("/test-cobalt")
-async def test_cobalt():
-    """Cobalt instances test endpoint"""
-    results = []
-    
-    for instance in COBALT_INSTANCES:
-        try:
-            start_time = time.time()
-            timeout = aiohttp.ClientTimeout(total=10)
-            
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(f"{instance}/api/serverInfo") as response:
-                    response_time = int((time.time() - start_time) * 1000)
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        results.append({
-                            "instance": instance,
-                            "status": "working",
-                            "response_time_ms": response_time,
-                            "data": data
-                        })
-                    else:
-                        results.append({
-                            "instance": instance,
-                            "status": f"error_{response.status}",
-                            "response_time_ms": response_time
-                        })
-        except Exception as e:
-            results.append({
+        results.append({
                 "instance": instance,
                 "status": "failed",
                 "error": str(e)
