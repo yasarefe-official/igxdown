@@ -67,8 +67,11 @@ async def lifespan(app: FastAPI):
     
     # Webhook modunda çalıştır
     if WEBHOOK_URL:
-        await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-        print(f"Webhook set to: {WEBHOOK_URL}/webhook")
+        # URL'in sonunda slash varsa kaldır
+        clean_url = WEBHOOK_URL.rstrip('/')
+        webhook_url = f"{clean_url}/webhook"
+        await bot_app.bot.set_webhook(url=webhook_url)
+        print(f"Webhook set to: {webhook_url}")
     else:
         print("WEBHOOK_URL not set, webhook not configured")
     
@@ -93,16 +96,23 @@ async def webhook(request: Request):
     try:
         # JSON verisini al
         json_data = await request.json()
+        print(f"Received webhook data: {json_data}")
         
         # Update objesini oluştur
         update = Update.de_json(json_data, bot_app.bot)
         
-        # Update'i işle
-        await bot_app.process_update(update)
-        
+        if update:
+            # Update'i işle
+            await bot_app.process_update(update)
+            print("Update processed successfully")
+        else:
+            print("Invalid update received")
+            
         return {"status": "ok"}
     except Exception as e:
         print(f"Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
