@@ -14,69 +14,78 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
-APIFY_API_TOKEN = os.environ.get("APIFY_API_TOKEN") # Apify token'ınız
 
-# --- API BİLGİLERİ (SİZİN ÖNERDİĞİNİZ DOĞRU VE SPESİFİK ARAÇ) ---
-APIFY_ACTOR_URL = "https://api.apify.com/v2/acts/scrapearchitect~instagram-reels-downloader/run-sync-get-dataset-items"
+# --- GÜVENİLİR VE ÜCRETSİZ API BİLGİSİ ---
+# iGram.io sitesinin kullandığı dahili API. Anahtar gerektirmez.
+DOWNLOADER_API_URL = "https://v3.igdownloader.app/api/ajaxSearch"
 
 # --- Bot Kurulumu ---
 bot_app = ApplicationBuilder().token(TOKEN).build()
 last_request_time = 0
 REQUEST_DELAY = 2
 
-async def normalize_instagram_url(url: str):
-    """URL'yi standart Instagram reel formatına çevirir."""
-    match = re.search(r'(?:instagram\.com/(?:p|reel|tv)/)([A-Za-z0-9_-]+)', url)
-    return f"https://www.instagram.com/reel/{match.group(1)}/" if match else None
-
-async def download_with_apify(url: str):
-    """Apify API ile video indirmeyi dener (Sizin önerdiğiniz araçla)."""
-    if not APIFY_API_TOKEN:
-        return None, "Bot sahibi Apify API anahtarını yapılandırmamış."
-
-    print(f"Starting download with 'scrapearchitect' Actor for: {url}")
-    params = {'token': APIFY_API_TOKEN}
-    # Bu actor, linkleri 'post_urls' altında bir dizi olarak bekliyor.
-    payload = {"post_urls": [url]}
-    timeout = aiohttp.ClientTimeout(total=150)
+async def download_instagram_video(url: str):
+    """
+    iGram'in dahili API'sini kullanarak Instagram videosu indirme linkini alır.
+    Bu yöntem anahtarsız, ücretsiz ve stabildir.
+    """
+    print(f"Starting download process for: {url}")
+    # API'ye gönderilecek form verisi
+    payload = {
+        'q': url,
+        't': 'media'
+    }
+    # Tarayıcıyı taklit eden başlık bilgileri
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36',
+        'Origin': 'https://igram.io',
+        'Referer': 'https://igram.io/'
+    }
+    timeout = aiohttp.ClientTimeout(total=60)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(APIFY_ACTOR_URL, json=payload, params=params) as response:
-                print(f"Apify response status: {response.status}")
+            async with session.post(DOWNLOADER_API_URL, data=payload, headers=headers) as response:
+                print(f"Downloader API response status: {response.status}")
                 if response.status == 200:
                     data = await response.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        item = data[0]
-                        # Bu actor, video linkini 'download_url' alanında veriyor.
-                        video_link = item.get("download_url")
-                        if video_link:
-                            print("Apify successful, got download_url.")
+                    if data.get("status") == "ok":
+                        # API, içinde indirme linki olan bir HTML metni döndürüyor.
+                        html_content = data.get("data", "")
+                        # HTML içerisinden gerçek video linkini Regex ile çekiyoruz.
+                        match = re.search(r'href="([^"]+)" class="abutton is-success is-fullwidth"', html_content)
+                        if match:
+                            video_link = match.group(1)
+                            print("Successfully extracted video download link.")
                             return video_link, None
-                    return None, "Apify'dan gelen yanıtta video linki bulunamadı. Link özel veya geçersiz olabilir."
+                    return None, "Video linki alınamadı. Link özel veya geçersiz olabilir."
                 else:
-                    error_text = await response.text()
-                    return None, f"Apify servisi {response.status} hatası döndü. Detay: {error_text[:200]}"
+                    return None, f"İndirme servisi {response.status} hatası verdi. Lütfen daha sonra tekrar deneyin."
     except asyncio.TimeoutError:
-         return None, "Apify servisinden yanıt alınamadı (zaman aşımı)."
+         return None, "İndirme servisinden yanıt alınamadı (zaman aşımı)."
     except Exception as e:
-        print(f"A critical error occurred in download_with_apify: {e}")
-        return None, "Apify servisinde beklenmedik bir hata oluştu."
+        print(f"A critical error occurred in downloader: {e}")
+        return None, "Beklenmedik bir hata oluştu."
 
-async def download_video_from_url(video_url: str, output_path: str):
-    """Son video dosyasını URL'den indirir."""
+async def download_file_to_temp(video_url: str):
+    """Verilen URL'den videoyu geçici bir dosyaya indirir."""
+    video_path = None
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(video_url) as response:
                 if response.status == 200:
-                    with open(output_path, 'wb') as f:
-                        f.write(await response.read())
-                    if os.path.getsize(output_path) < 1000:
-                        return False, "İndirilen dosya bozuk veya boş."
-                    return True, None
-                return False, f"Son video indirilemedi (Sunucu hatası: {response.status})."
+                    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
+                        video_path = tmp.name
+                        tmp.write(await response.read())
+                    if os.path.getsize(video_path) > 1000:
+                        return video_path, None
+                    else:
+                        os.unlink(video_path)
+                        return None, "İndirilen dosya bozuk veya boş."
+                return None, f"Video dosyası indirilemedi (Sunucu: {response.status})."
     except Exception as e:
-        return False, f"Video indirme sırasında bir ağ hatası oluştu: {e}"
+        if video_path and os.path.exists(video_path): os.unlink(video_path)
+        return None, f"Video indirme sırasında ağ hatası: {e}"
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gelen mesajları işler ve indirme sürecini başlatır."""
@@ -84,45 +93,41 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if time.time() - last_request_time < REQUEST_DELAY: return
     last_request_time = time.time()
 
-    normalized_url = await normalize_instagram_url(update.message.text.strip())
-    if not normalized_url:
-        await update.message.reply_text("❌ Lütfen geçerli bir Instagram video/reel linki gönderin.")
+    url = update.message.text.strip()
+    if not "instagram.com" in url:
+        await update.message.reply_text("❌ Lütfen geçerli bir Instagram linki gönderin.")
         return
 
     progress_msg = await update.message.reply_text("🔄 Video indiriliyor, lütfen bekleyin...")
     
-    video_url, error = await download_with_apify(normalized_url)
+    video_url, error = await download_instagram_video(url)
 
     if error:
         await progress_msg.edit_text(f"❌ İndirme başarısız.\n\nSebep: {error}")
         return
 
-    video_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
-            video_path = tmp.name
-        
-        success, dl_error = await download_video_from_url(video_url, video_path)
-
-        if success:
-            await progress_msg.edit_text("📤 Video gönderiliyor...")
-            caption = f"🤖 @{context.bot.username} ile indirildi."
-            with open(video_path, 'rb') as video_file:
-                await context.bot.send_video(
-                    chat_id=update.effective_chat.id, video=video_file, caption=caption, supports_streaming=True
-                )
-            await progress_msg.delete()
-        else:
-            await progress_msg.edit_text(f"❌ İndirme başarısız.\n\nSebep: {dl_error}")
+    video_path, error = await download_file_to_temp(video_url)
     
+    if error:
+        await progress_msg.edit_text(f"❌ İndirme başarısız.\n\nSebep: {error}")
+        return
+
+    try:
+        await progress_msg.edit_text("📤 Video gönderiliyor...")
+        caption = f"🤖 @{context.bot.username} ile indirildi."
+        with open(video_path, 'rb') as video_file:
+            await context.bot.send_video(
+                chat_id=update.effective_chat.id, video=video_file, caption=caption, supports_streaming=True
+            )
+        await progress_msg.delete()
     except Exception as e:
-        await progress_msg.edit_text(f"❌ Kritik bir hata oluştu: {e}")
+        await progress_msg.edit_text(f"❌ Video gönderilirken bir hata oluştu: {e}")
     finally:
-        if video_path and os.path.exists(video_path):
+        if os.path.exists(video_path):
             os.unlink(video_path)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Stabil Instagram Video İndirici v4.4 (Pro)\n\nBota bir Instagram linki gönderin, gerisini o halleder.")
+    await update.message.reply_text("🚀 Instagram Video İndirici v5.0 (Stabil API)\n\nBota bir Instagram linki gönderin, gerisini o halleder.")
 
 # Handler'ları ve FastAPI uygulamasını ayarla
 bot_app.add_handler(CommandHandler("start", start_cmd))
@@ -134,7 +139,7 @@ async def lifespan(app: FastAPI):
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
-    print(f"🚀 Bot v4.4 (scrapearchitect Actor) started! Webhook: {webhook_url}")
+    print(f"🚀 Bot v5.0 (Stable Internal API) started! Webhook: {webhook_url}")
     yield
     await bot_app.stop()
     await bot_app.shutdown()
