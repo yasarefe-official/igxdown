@@ -8,16 +8,14 @@ from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- Environment Variables ---
+# --- Ortam Değişkenleri ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
-# The correct session details from your cookie file
-IG_USER_ID = os.environ.get("IG_USER_ID")
-IG_SESSIONID = os.environ.get("IG_SESSIONID")
-IG_CSRFTOKEN = os.environ.get("IG_CSRFTOKEN")
+IG_USERNAME = os.environ.get("IG_USERNAME")
+IG_COOKIES_CONTENT = os.environ.get("IG_COOKIES")
 
-# --- Instaloader Setup ---
+# --- Instaloader Kurulumu ---
 L = instaloader.Instaloader(
     save_metadata=False,
     download_pictures=False,
@@ -26,7 +24,7 @@ L = instaloader.Instaloader(
     compress_json=False,
 )
 
-# --- Bot and FastAPI Setup ---
+# --- Bot ve FastAPI Kurulumu ---
 bot_app = ApplicationBuilder().token(TOKEN).build()
 app = FastAPI()
 
@@ -63,46 +61,44 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"An error occurred: {e}")
         await progress_msg.edit_text("Failed to process the request. The post may be private or an error occurred.")
 
-# --- Application Startup and Authentication ---
+# --- Handler'lar ve Uygulama Yaşam Döngüsü ---
+bot_app.add_handler(CommandHandler("start", start_cmd))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initializes the bot and authenticates the Instaloader session."""
-    if not all([IG_USER_ID, IG_SESSIONID, IG_CSRFTOKEN]):
-        raise ValueError("CRITICAL: One or more Instagram session variables are not set!")
+    """Botu başlatır, kimlik doğrular ve kapatır."""
+    if not IG_COOKIES_CONTENT or not IG_USERNAME:
+        raise ValueError("CRITICAL: IG_COOKIES or IG_USERNAME environment variable is not set!")
 
+    cookie_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
     try:
-        # This is the CORRECT way to load an existing session.
-        # We manually construct the session dictionary that Instaloader expects.
-        L.context.load_session(
-            username=None,  # Username is not needed when loading a session
-            session_data={
-                "ds_user_id": IG_USER_ID,
-                "sessionid": IG_SESSIONID,
-                "csrftoken": IG_CSRFTOKEN,
-            }
-        )
-        print("Instaloader session successfully authenticated using session details.")
+        cookie_file.write(IG_COOKIES_CONTENT)
+        cookie_file.close() 
+        print(f"Cookies loaded into temporary file: {cookie_file.name}")
         
+        # --- DOĞRU FONKSİYON KULLANIMI ---
+        # Hata logunun bize önerdiği ve kütüphanenin gerçekte beklediği fonksiyon bu.
+        # Bu fonksiyon, kullanıcı adı ve cookie dosyasının yolunu parametre olarak alır.
+        L.load_session_from_file(IG_USERNAME, cookie_file.name)
+        print(f"Instaloader session authenticated for user '{IG_USERNAME}' using cookies.")
+
         await bot_app.initialize()
         webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
         await bot_app.bot.set_webhook(url=webhook_url)
         await bot_app.start()
-        print(f"🚀 Bot (Correct Instaloader Auth) started! Webhook: {webhook_url}")
-        
-        yield # The application is now running
-
+        print(f"🚀 Bot (Correct Auth) started! Webhook: {webhook_url}")
+        yield
     finally:
-        # This will run when the application is shutting down
-        print("Application is shutting down.")
-        if bot_app.is_running:
-            await bot_app.stop()
-            await bot_app.shutdown()
-
+        # Hata olsa da olmasa da uygulama kapanırken bu blok çalışır.
+        print("Application shutting down...")
+        os.unlink(cookie_file.name)
+        print("Temporary cookie file cleaned up.")
+        # Hatalı olan 'is_running' kontrolü kaldırıldı.
+        await bot_app.stop()
+        await bot_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
-
-bot_app.add_handler(CommandHandler("start", start_cmd))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
 @app.post("/webhook")
 async def webhook(request: Request):
