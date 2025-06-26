@@ -4,9 +4,11 @@ import asyncio
 import subprocess
 import tempfile
 import json
+import random
 from contextlib import asynccontextmanager
 import aiohttp
 import time
+from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, Request
 from telegram import Update
@@ -28,66 +30,144 @@ bot_app = ApplicationBuilder().token(TOKEN).build()
 
 # Rate limiting için son istek zamanı
 last_request_time = 0
-REQUEST_DELAY = 5  # saniye
+REQUEST_DELAY = 3  # saniye
 
-async def get_instagram_video_url(post_url):
-    """Instagram video URL'ini al - alternatif yöntem"""
+# User agent rotasyonu
+USER_AGENTS = [
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.210 Mobile Safari/537.36',
+    'Instagram 239.0.0.10.109 Android (29/10; 420dpi; 1080x2340; samsung; SM-G973F; beyond1; exynos9820; tr_TR; 369149742)',
+]
+
+def get_random_user_agent():
+    return random.choice(USER_AGENTS)
+
+async def normalize_instagram_url(url):
+    """Instagram URL'ini normalize et"""
     try:
-        # Farklı yt-dlp konfigürasyonları dene
+        # Farklı Instagram URL formatları
+        patterns = [
+            r'(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)',
+            r'(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)/?\?.*',
+            r'(?:https?://)?(?:www\.)?instagram\.com/tv/([A-Za-z0-9_-]+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                post_id = match.group(1)
+                # Reel olup olmadığını kontrol et
+                if '/reel/' in url or '/tv/' in url:
+                    return f"https://www.instagram.com/reel/{post_id}/"
+                else:
+                    return f"https://www.instagram.com/p/{post_id}/"
+        
+        return None
+    except Exception as e:
+        print(f"URL normalize error: {e}")
+        return None
+
+async def get_instagram_video_url_advanced(post_url):
+    """Gelişmiş Instagram video URL alma"""
+    try:
+        # Çoklu konfigürasyon stratejisi
         configs = [
-            # Config 1: Basit
+            # Config 1: Temel mobil
             {
                 'cmd': [
                     'yt-dlp',
                     '--no-playlist',
                     '--get-url',
-                    '--format', 'best[ext=mp4]/best',
+                    '--format', 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+                    '--user-agent', get_random_user_agent(),
+                    '--extractor-retries', '3',
+                    '--fragment-retries', '3',
+                    '--socket-timeout', '30',
                     post_url
                 ]
             },
-            # Config 2: Farklı user agent
-            {
-                'cmd': [
-                    'yt-dlp',
-                    '--no-playlist',
-                    '--get-url',
-                    '--format', 'best[ext=mp4]/best',
-                    '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
-                    post_url
-                ]
-            },
-            # Config 3: Mobile user agent
+            # Config 2: Instagram-specific
             {
                 'cmd': [
                     'yt-dlp',
                     '--no-playlist',
                     '--get-url',
                     '--format', 'best',
-                    '--user-agent', 'Instagram 219.0.0.12.117 Android',
+                    '--user-agent', 'Instagram 239.0.0.10.109 Android',
+                    '--add-header', 'Accept-Language:en-US,en;q=0.9',
+                    '--add-header', 'Accept-Encoding:gzip, deflate, br',
+                    '--extractor-retries', '5',
+                    '--sleep-interval', '1',
+                    '--max-sleep-interval', '3',
+                    post_url
+                ]
+            },
+            # Config 3: Proxy benzeri
+            {
+                'cmd': [
+                    'yt-dlp',
+                    '--no-playlist',
+                    '--get-url',
+                    '--format', 'worst[ext=mp4]/worst',  # Daha küçük boyut
+                    '--user-agent', get_random_user_agent(),
+                    '--ignore-errors',
+                    '--no-check-certificate',
+                    post_url
+                ]
+            },
+            # Config 4: Alternatif format
+            {
+                'cmd': [
+                    'yt-dlp',
+                    '--no-playlist',
+                    '--get-urls',
+                    '--user-agent', get_random_user_agent(),
+                    '--cookies-from-browser', 'chrome',  # Eğer Chrome cookie'si varsa
                     post_url
                 ]
             }
         ]
         
-        for config in configs:
+        for i, config in enumerate(configs):
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *config['cmd'],
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                print(f"Trying config {i+1}...")
+                
+                # Timeout ile process oluştur
+                process = await asyncio.wait_for(
+                    asyncio.create_subprocess_exec(
+                        *config['cmd'],
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    ),
+                    timeout=30
                 )
                 
-                stdout, stderr = await process.communicate()
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=45
+                )
                 
                 if process.returncode == 0:
-                    video_url = stdout.decode().strip()
-                    if video_url and video_url.startswith('http'):
+                    output = stdout.decode().strip()
+                    print(f"Config {i+1} output: {output[:100]}...")
+                    
+                    # Birden fazla URL varsa ilkini al
+                    urls = [line.strip() for line in output.split('\n') if line.strip().startswith('http')]
+                    if urls:
+                        video_url = urls[0]
+                        print(f"Found video URL: {video_url[:100]}...")
                         return video_url
                 else:
-                    print(f"Config failed: {stderr.decode()}")
+                    error_msg = stderr.decode()
+                    print(f"Config {i+1} failed: {error_msg[:200]}...")
                     
+            except asyncio.TimeoutError:
+                print(f"Config {i+1} timeout")
+                continue
             except Exception as e:
-                print(f"Config error: {e}")
+                print(f"Config {i+1} error: {e}")
                 continue
         
         return None
@@ -96,127 +176,236 @@ async def get_instagram_video_url(post_url):
         print(f"Get URL error: {e}")
         return None
 
-async def download_video_direct(video_url, output_path):
-    """Videoyu doğrudan indir"""
+async def download_video_with_session(video_url, output_path):
+    """Gelişmiş video indirme"""
     try:
-        timeout = aiohttp.ClientTimeout(total=60)
+        # Session konfigürasyonu
+        timeout = aiohttp.ClientTimeout(total=120, connect=30)
         headers = {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+            'User-Agent': get_random_user_agent(),
             'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Language': 'en-US,en;q=0.9,tr;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'video',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
         }
         
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        connector = aiohttp.TCPConnector(
+            limit=10,
+            limit_per_host=5,
+            keepalive_timeout=30,
+            enable_cleanup_closed=True
+        )
+        
+        async with aiohttp.ClientSession(
+            timeout=timeout, 
+            headers=headers, 
+            connector=connector
+        ) as session:
+            
+            # Önce HEAD request ile boyutu kontrol et
+            try:
+                async with session.head(video_url) as head_response:
+                    if head_response.status == 200:
+                        content_length = head_response.headers.get('Content-Length')
+                        if content_length:
+                            size_mb = int(content_length) / (1024 * 1024)
+                            print(f"Video size: {size_mb:.2f} MB")
+                            if size_mb > 45:  # Telegram limiti
+                                print("Video too large for Telegram")
+                                return False
+            except:
+                pass  # HEAD request başarısız olursa devam et
+            
+            # Asıl indirme
             async with session.get(video_url) as response:
                 if response.status == 200:
+                    total_size = 0
                     with open(output_path, 'wb') as f:
-                        async for chunk in response.content.iter_chunked(8192):
+                        async for chunk in response.content.iter_chunked(16384):  # 16KB chunks
                             f.write(chunk)
-                    return True
+                            total_size += len(chunk)
+                            
+                            # Boyut kontrolü
+                            if total_size > 50 * 1024 * 1024:  # 50MB
+                                print("File too large, stopping download")
+                                return False
+                    
+                    print(f"Downloaded {total_size / (1024*1024):.2f} MB")
+                    return total_size > 0
                 else:
-                    print(f"HTTP {response.status} error")
+                    print(f"HTTP {response.status}: {response.reason}")
                     return False
                     
+    except asyncio.TimeoutError:
+        print("Download timeout")
+        return False
     except Exception as e:
-        print(f"Direct download error: {e}")
+        print(f"Download error: {e}")
         return False
 
-async def download_instagram_video(url):
-    """Instagram video indirme - gelişmiş yöntem"""
+async def download_instagram_video_improved(url):
+    """Gelişmiş Instagram video indirme"""
+    temp_path = None
     try:
+        # URL'yi normalize et
+        normalized_url = await normalize_instagram_url(url)
+        if not normalized_url:
+            print("Could not normalize URL")
+            return None
+        
+        print(f"Normalized URL: {normalized_url}")
+        
         # Geçici dosya oluştur
         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
             temp_path = temp_file.name
         
-        # Önce video URL'ini al
-        video_url = await get_instagram_video_url(url)
+        # Strateji 1: Video URL'ini al ve doğrudan indir
+        print("Strategy 1: Get video URL and download directly")
+        video_url = await get_instagram_video_url_advanced(normalized_url)
         
         if video_url:
-            # Videoyu doğrudan indir
-            success = await download_video_direct(video_url, temp_path)
+            print("Downloading video directly...")
+            success = await download_video_with_session(video_url, temp_path)
             
-            if success and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+            if success and os.path.exists(temp_path) and os.path.getsize(temp_path) > 1000:  # En az 1KB
+                print(f"Success! File size: {os.path.getsize(temp_path)} bytes")
                 return temp_path
         
-        # Eğer yukarıdaki yöntem başarısız olursa, yt-dlp ile doğrudan indir
-        print("Trying direct yt-dlp download...")
+        # Strateji 2: yt-dlp ile doğrudan indirme (farklı konfigürasyonlar)
+        print("Strategy 2: Direct yt-dlp download")
         
-        cmd = [
-            'yt-dlp',
-            '--no-playlist',
-            '--format', 'best[ext=mp4]/best',
-            '--output', temp_path,
-            '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15',
-            '--extractor-retries', '5',
-            '--fragment-retries', '5',
-            '--ignore-errors',
-            url
+        download_configs = [
+            {
+                'cmd': [
+                    'yt-dlp',
+                    '--no-playlist',
+                    '--format', 'best[height<=480][ext=mp4]/worst[ext=mp4]/best',
+                    '--output', temp_path,
+                    '--user-agent', get_random_user_agent(),
+                    '--extractor-retries', '3',
+                    '--fragment-retries', '3',
+                    '--ignore-errors',
+                    '--no-check-certificate',
+                    normalized_url
+                ]
+            },
+            {
+                'cmd': [
+                    'yt-dlp',
+                    '--no-playlist',
+                    '--format', 'worst',  # En küçük boyut
+                    '--output', temp_path,
+                    '--user-agent', 'Instagram 239.0.0.10.109 Android',
+                    '--sleep-interval', '2',
+                    '--max-sleep-interval', '5',
+                    normalized_url
+                ]
+            }
         ]
         
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+        for i, config in enumerate(download_configs):
+            try:
+                print(f"Trying download config {i+1}...")
+                
+                process = await asyncio.wait_for(
+                    asyncio.create_subprocess_exec(
+                        *config['cmd'],
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    ),
+                    timeout=30
+                )
+                
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=90
+                )
+                
+                if process.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 1000:
+                    print(f"Download config {i+1} successful!")
+                    return temp_path
+                else:
+                    error_msg = stderr.decode()
+                    print(f"Download config {i+1} failed: {error_msg[:200]}...")
+                    
+            except asyncio.TimeoutError:
+                print(f"Download config {i+1} timeout")
+                continue
+            except Exception as e:
+                print(f"Download config {i+1} error: {e}")
+                continue
         
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-            return temp_path
-        else:
-            print(f"yt-dlp error: {stderr.decode()}")
-            
-        # Dosya varsa sil
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+        # Eğer hiç bir yöntem işe yaramazsa
+        print("All strategies failed")
         return None
         
     except Exception as e:
         print(f"Download error: {e}")
         return None
+    finally:
+        # Başarısız olan geçici dosyayı temizle
+        if temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) <= 1000:
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
 
-async def get_video_info(url):
-    """Video bilgilerini al"""
+async def get_video_info_safe(url):
+    """Güvenli video bilgisi alma"""
     try:
         cmd = [
             'yt-dlp',
             '--dump-json',
             '--no-playlist',
             '--ignore-errors',
+            '--user-agent', get_random_user_agent(),
+            '--socket-timeout', '20',
             url
         ]
         
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        process = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            ),
+            timeout=25
         )
         
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=30
+        )
         
         if process.returncode == 0:
             info = json.loads(stdout.decode())
             return {
-                'title': info.get('title', 'Instagram Video'),
-                'uploader': info.get('uploader', 'Unknown'),
-                'duration': info.get('duration', 0)
+                'title': info.get('title', 'Instagram Video')[:100],  # Başlığı sınırla
+                'uploader': info.get('uploader', 'Unknown')[:50],
+                'duration': info.get('duration', 0),
+                'view_count': info.get('view_count', 0)
             }
         return None
-    except Exception as e:
+    except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
         print(f"Info error: {e}")
         return None
 
 # Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 Instagram Video İndirici Bot\n\n"
+        "🔥 Instagram Video İndirici Bot v2.0\n\n"
         "📱 Bir Instagram reel/post linkini gönderin, size videoyu indireyim!\n\n"
         "✨ Desteklenen formatlar:\n"
         "• instagram.com/reel/...\n"
-        "• instagram.com/p/...\n\n"
-        "⚡ Gelişmiş indirme teknolojisi ile hızlı ve güvenilir!"
+        "• instagram.com/p/...\n"
+        "• instagram.com/tv/...\n\n"
+        "⚡ Gelişmiş multi-strateji indirme teknolojisi!\n"
+        "🛡️ Anti-ban koruması aktif\n\n"
+        "💡 İpucu: Özel hesap videoları indirilemez!"
     )
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -224,30 +413,17 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     txt = update.message.text.strip()
     
-    # Instagram URL pattern'ları
-    instagram_patterns = [
-        r'(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)',
-        r'(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)/?\?.*',
-    ]
+    # Instagram URL kontrolü
+    normalized_url = await normalize_instagram_url(txt)
     
-    found_url = None
-    for pattern in instagram_patterns:
-        match = re.search(pattern, txt)
-        if match:
-            # URL'yi normalize et
-            post_id = match.group(1)
-            if '/reel/' in txt:
-                found_url = f"https://www.instagram.com/reel/{post_id}/"
-            else:
-                found_url = f"https://www.instagram.com/p/{post_id}/"
-            break
-    
-    if not found_url:
+    if not normalized_url:
         await update.message.reply_text(
-            "❌ Geçerli bir Instagram reel/post URL'si göndermelisiniz!\n\n"
-            "Örnek:\n"
+            "❌ Geçerli bir Instagram URL'si göndermelisiniz!\n\n"
+            "✅ Desteklenen formatlar:\n"
             "• https://www.instagram.com/reel/ABC123/\n"
-            "• https://www.instagram.com/p/ABC123/"
+            "• https://www.instagram.com/p/ABC123/\n"
+            "• https://www.instagram.com/tv/ABC123/\n\n"
+            "💡 URL'yi kopyala-yapıştır yapın!"
         )
         return
 
@@ -259,35 +435,57 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     last_request_time = time.time()
     
-    progress_msg = await update.message.reply_text("⏳ Video indiriliyor... Bu biraz zaman alabilir...")
+    # Progress mesajı
+    progress_msg = await update.message.reply_text(
+        "🔄 Video indiriliyor...\n"
+        "⏱️ Bu işlem 30-60 saniye sürebilir\n"
+        "🛡️ Anti-ban koruması aktif"
+    )
     
     try:
-        # Video indir
-        video_path = await download_instagram_video(found_url)
+        # Video indirme
+        await asyncio.sleep(1)  # Kısa bekleme
+        await progress_msg.edit_text("🔍 Video kaynağı bulunuyor...")
+        
+        video_path = await download_instagram_video_improved(normalized_url)
         
         if video_path and os.path.exists(video_path):
-            # Video boyutunu kontrol et (Telegram limiti ~50MB)
             file_size = os.path.getsize(video_path)
+            
+            # Dosya boyutu kontrolleri
             if file_size > 50 * 1024 * 1024:  # 50MB
-                await progress_msg.edit_text("❌ Video çok büyük! (>50MB)")
+                await progress_msg.edit_text(
+                    "❌ Video çok büyük! (>50MB)\n"
+                    "Telegram limiti aşıldı."
+                )
                 os.unlink(video_path)
                 return
             
-            if file_size == 0:
-                await progress_msg.edit_text("❌ Video dosyası boş!")
+            if file_size < 1000:  # 1KB'den küçük
+                await progress_msg.edit_text(
+                    "❌ Video dosyası çok küçük veya bozuk!\n"
+                    "Lütfen farklı bir video deneyin."
+                )
                 os.unlink(video_path)
                 return
             
             await progress_msg.edit_text("📤 Video gönderiliyor...")
             
-            # Video bilgilerini al
-            info = await get_video_info(found_url)
+            # Video bilgilerini al (opsiyonel)
+            info = await get_video_info_safe(normalized_url)
             
             # Caption oluştur
-            caption = "📱 Instagram Video İndirildi ✅"
+            size_mb = file_size / (1024 * 1024)
+            caption = f"📱 Instagram Video İndirildi ✅\n📊 Boyut: {size_mb:.1f} MB"
+            
             if info:
-                title = info['title'][:50] + "..." if len(info['title']) > 50 else info['title']
-                caption = f"📱 {title}\n👤 {info['uploader']}\n\n✅ Bot tarafından indirildi"
+                caption = (
+                    f"📱 {info['title']}\n"
+                    f"👤 {info['uploader']}\n"
+                    f"📊 Boyut: {size_mb:.1f} MB\n"
+                    f"⏱️ Süre: {info['duration']}s\n\n"
+                    f"✅ Bot tarafından indirildi"
+                )
             
             # Video gönder
             try:
@@ -297,8 +495,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         video=video_file,
                         supports_streaming=True,
                         caption=caption,
-                        read_timeout=120,
-                        write_timeout=120,
+                        read_timeout=180,
+                        write_timeout=180,
                         connect_timeout=60
                     )
                 
@@ -306,7 +504,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             except Exception as send_error:
                 print(f"Send error: {send_error}")
-                await progress_msg.edit_text("❌ Video gönderilirken hata oluştu!")
+                await progress_msg.edit_text(
+                    "❌ Video gönderilirken hata oluştu!\n"
+                    "Video çok büyük olabilir veya ağ problemi yaşanıyor."
+                )
             
             # Geçici dosyayı sil
             try:
@@ -316,22 +517,57 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         else:
             await progress_msg.edit_text(
-                "❌ Video indirilemedi!\n\n"
-                "Olası nedenler:\n"
-                "• Video özel hesapta olabilir\n"
-                "• Link geçersiz olabilir\n"
-                "• Instagram anti-bot koruması aktif\n"
-                "• Video artık mevcut olmayabilir\n\n"
-                "💡 Birkaç dakika sonra tekrar deneyin."
+                "❌ Video indirilemedi! 😔\n\n"
+                "🔍 Olası nedenler:\n"
+                "• Video özel hesapta 🔒\n"
+                "• Instagram anti-bot koruması 🛡️\n"
+                "• Video silinmiş veya mevcut değil 🗑️\n"
+                "• Geçici ağ problemi 🌐\n\n"
+                "💡 Çözüm önerileri:\n"
+                "• 2-3 dakika bekleyip tekrar deneyin ⏰\n"
+                "• Farklı bir video deneyin 🔄\n"
+                "• URL'yi tekrar kopyalayın 📋\n\n"
+                "🆘 Sorun devam ederse /start ile yeniden başlatın"
             )
             
     except Exception as e:
         error_msg = str(e)
         print(f"Error in handle_msg: {error_msg}")
-        await progress_msg.edit_text(f"❌ Hata oluştu: {error_msg[:100]}")
+        await progress_msg.edit_text(
+            f"❌ Beklenmeyen hata oluştu!\n\n"
+            f"🔧 Hata: {error_msg[:100]}...\n\n"
+            f"💡 /start ile yeniden başlatmayı deneyin"
+        )
 
-# Kayıt et
+# Debug komutu
+async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug bilgilerini göster"""
+    try:
+        # yt-dlp version
+        process = await asyncio.create_subprocess_exec(
+            'yt-dlp', '--version',
+            stdout=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await process.communicate()
+        yt_dlp_version = stdout.decode().strip()
+        
+        debug_info = (
+            f"🔧 Debug Bilgileri:\n\n"
+            f"📦 yt-dlp: {yt_dlp_version}\n"
+            f"🐍 Python: {os.sys.version.split()[0]}\n"
+            f"⏰ Son istek: {time.time() - last_request_time:.1f}s önce\n"
+            f"🔄 Rate limit: {REQUEST_DELAY}s\n"
+            f"🎯 User agents: {len(USER_AGENTS)} adet"
+        )
+        
+        await update.message.reply_text(debug_info)
+        
+    except Exception as e:
+        await update.message.reply_text(f"Debug hatası: {e}")
+
+# Handlers kayıt
 bot_app.add_handler(CommandHandler("start", start_cmd))
+bot_app.add_handler(CommandHandler("debug", debug_cmd))
 bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
 # Lifespan manager
@@ -340,44 +576,49 @@ async def lifespan(app: FastAPI):
     # Startup
     await bot_app.initialize()
     
-    # yt-dlp varlığını kontrol et
+    # yt-dlp kontrolü
     try:
         process = await asyncio.create_subprocess_exec('yt-dlp', '--version', stdout=asyncio.subprocess.PIPE)
         stdout, _ = await process.communicate()
-        print(f"yt-dlp version: {stdout.decode().strip()}")
+        print(f"✅ yt-dlp version: {stdout.decode().strip()}")
     except FileNotFoundError:
-        print("WARNING: yt-dlp not found! Install with: pip install yt-dlp")
+        print("❌ WARNING: yt-dlp not found! Install with: pip install yt-dlp")
     
-    # Webhook modunda çalıştır
+    # Webhook ayarla
     if WEBHOOK_URL:
         clean_url = WEBHOOK_URL.rstrip('/')
         webhook_url = f"{clean_url}/webhook"
         await bot_app.bot.set_webhook(url=webhook_url)
-        print(f"Webhook set to: {webhook_url}")
+        print(f"✅ Webhook set to: {webhook_url}")
     else:
-        print("WEBHOOK_URL not set, webhook not configured")
+        print("⚠️ WEBHOOK_URL not set, webhook not configured")
     
     await bot_app.start()
+    print("🚀 Instagram Video Downloader Bot started!")
     
     yield
     
     # Shutdown
     await bot_app.stop()
     await bot_app.shutdown()
+    print("🛑 Bot stopped")
 
 # FastAPI app
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 async def health():
-    return {"status": "ok", "message": "Instagram Video Downloader Bot is running"}
+    return {
+        "status": "ok", 
+        "message": "Instagram Video Downloader Bot v2.0 is running",
+        "features": ["Multi-strategy download", "Anti-ban protection", "Rate limiting"]
+    }
 
 @app.post("/webhook")
 async def webhook(request: Request):
     """Telegram webhook endpoint"""
     try:
         json_data = await request.json()
-        
         update = Update.de_json(json_data, bot_app.bot)
         
         if update:
