@@ -1,8 +1,8 @@
 import os
 import re
-import instaloader
 import asyncio
-import time
+import subprocess
+import tempfile
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -18,112 +18,161 @@ from telegram.ext import (
 # Env'den al ngl
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 PORT = int(os.environ.get("PORT", "8080"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")  # Webhook URL'ini env'den al
-
-# Instagram login bilgileri (isteğe bağlı)
-INSTAGRAM_USERNAME = os.environ.get("INSTAGRAM_USERNAME", "")
-INSTAGRAM_PASSWORD = os.environ.get("INSTAGRAM_PASSWORD", "")
-
-# Instaloader config - User-Agent ve rate limiting ayarları
-L = instaloader.Instaloader(
-    save_metadata=False,
-    download_videos=False,
-    download_video_thumbnails=False,
-    compress_json=False,
-    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    request_timeout=60,
-)
-
-# Instagram'a login (isteğe bağlı)
-async def setup_instagram_session():
-    if INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD:
-        try:
-            L.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            print("Instagram'a başarıyla giriş yapıldı")
-        except Exception as e:
-            print(f"Instagram login hatası: {e}")
-            print("Anonim modda devam ediliyor...")
-
-# Rate limiting için son istek zamanı
-last_request_time = 0
-REQUEST_DELAY = 3  # saniye
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 
 # Telegram bot application
 bot_app = ApplicationBuilder().token(TOKEN).build()
 
+# Rate limiting için son istek zamanı
+last_request_time = 0
+REQUEST_DELAY = 5  # saniye
+
+async def download_instagram_video(url):
+    """yt-dlp kullanarak Instagram video indirme"""
+    try:
+        # Geçici dosya oluştur
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # yt-dlp komutu
+        cmd = [
+            'yt-dlp',
+            '--no-playlist',
+            '--format', 'best[ext=mp4]',
+            '--output', temp_path,
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '--cookies-from-browser', 'chrome',  # Chrome cookies kullan
+            url
+        ]
+        
+        # Komut çalıştır
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0:
+            return temp_path
+        else:
+            print(f"yt-dlp error: {stderr.decode()}")
+            return None
+            
+    except Exception as e:
+        print(f"Download error: {e}")
+        return None
+
+async def get_video_info(url):
+    """Video bilgilerini al"""
+    try:
+        cmd = [
+            'yt-dlp',
+            '--dump-json',
+            '--no-playlist',
+            url
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0:
+            import json
+            info = json.loads(stdout.decode())
+            return {
+                'title': info.get('title', 'Instagram Video'),
+                'uploader': info.get('uploader', 'Unknown'),
+                'duration': info.get('duration', 0)
+            }
+        return None
+    except Exception as e:
+        print(f"Info error: {e}")
+        return None
+
 # Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Yo dawg, reel linkini at ts, beni test et 🔥")
+    await update.message.reply_text("Yo dawg, reel linkini at ts, beni test et 🔥\n\n✨ Artık daha güvenilir yöntem kullanıyorum!")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global last_request_time
     
     txt = update.message.text.strip()
-    m = re.search(r"/reel/([^/?]+)", txt)
-    if not m:
-        await update.message.reply_text("Geçerli reel URL'si at ts 🙏")
+    
+    # Instagram URL pattern'ları
+    instagram_patterns = [
+        r'instagram\.com/(?:p|reel)/([^/?]+)',
+        r'instagram\.com/(?:p|reel)/([^/?]+)/?\?.*',
+    ]
+    
+    found_url = None
+    for pattern in instagram_patterns:
+        if re.search(pattern, txt):
+            found_url = txt
+            break
+    
+    if not found_url:
+        await update.message.reply_text("Geçerli Instagram reel/post URL'si at ts 🙏")
         return
 
-    sc = m.group(1)
-    await update.message.reply_text("Link çekiliyor… crash out etme 😂")
-
+    # Rate limiting
+    import time
+    current_time = time.time()
+    if current_time - last_request_time < REQUEST_DELAY:
+        sleep_time = REQUEST_DELAY - (current_time - last_request_time)
+        await asyncio.sleep(sleep_time)
+    
+    last_request_time = time.time()
+    
+    progress_msg = await update.message.reply_text("Video indiriliyor... 📥")
+    
     try:
-        # Rate limiting - istekler arası bekle
-        import time
-        current_time = time.time()
-        if current_time - last_request_time < REQUEST_DELAY:
-            sleep_time = REQUEST_DELAY - (current_time - last_request_time)
-            await asyncio.sleep(sleep_time)
+        # Video bilgilerini al
+        info = await get_video_info(found_url)
         
-        last_request_time = time.time()
+        # Video indir
+        video_path = await download_instagram_video(found_url)
         
-        # Instagram session ayarları
-        L.context.log("Fetching post data...")
-        
-        # Retry mekanizması
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                post = instaloader.Post.from_shortcode(L.context, sc)
-                
-                if post.is_video:
-                    video_url = post.video_url
-                    await context.bot.send_video(
-                        chat_id=update.effective_chat.id,
-                        video=video_url,
-                        supports_streaming=True,
-                        caption=f"📱 İndirilen reel\n👤 @{post.owner_username}"
-                    )
-                else:
-                    # Video değilse fotoğraf gönder
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=post.url,
-                        caption=f"📷 İndirilen post\n👤 @{post.owner_username}"
-                    )
-                break
-                    
-            except instaloader.exceptions.ConnectionException as e:
-                if "401" in str(e) or "Please wait" in str(e):
-                    if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 10  # 10, 20, 30 saniye bekle
-                        await update.message.reply_text(f"Instagram rate limit! {wait_time} saniye bekleniyor... 🕐")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        await update.message.reply_text("Instagram geçici olarak erişimi kısıtladı. Lütfen daha sonra tekrar deneyin 😔")
-                        return
-                else:
-                    raise e
-                    
+        if video_path and os.path.exists(video_path):
+            # Video boyutunu kontrol et (Telegram limiti ~50MB)
+            file_size = os.path.getsize(video_path)
+            if file_size > 50 * 1024 * 1024:  # 50MB
+                await progress_msg.edit_text("Video çok büyük! (>50MB) 😔")
+                os.unlink(video_path)
+                return
+            
+            await progress_msg.edit_text("Video gönderiliyor... 📤")
+            
+            # Caption oluştur
+            caption = "📱 İndirilen reel/video"
+            if info:
+                caption = f"📱 {info['title'][:100]}\n👤 @{info['uploader']}"
+            
+            # Video gönder
+            with open(video_path, 'rb') as video_file:
+                await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=video_file,
+                    supports_streaming=True,
+                    caption=caption
+                )
+            
+            # Geçici dosyayı sil
+            os.unlink(video_path)
+            await progress_msg.delete()
+            
+        else:
+            await progress_msg.edit_text("Video indirilemedi 😔\n\nMümkün nedenler:\n• Video özel hesapta\n• Link geçersiz\n• Instagram rate limit")
+            
     except Exception as e:
         error_msg = str(e)
-        if "401" in error_msg or "Please wait" in error_msg:
-            await update.message.reply_text("Instagram rate limit! Biraz bekleyip tekrar deneyin 🕐")
-        elif "404" in error_msg:
-            await update.message.reply_text("Post bulunamadı! Link doğru mu? 🤔")
-        else:
-            await update.message.reply_text(f"Bir hata oluştu: {error_msg} 💔")
+        print(f"Error in handle_msg: {error_msg}")
+        await progress_msg.edit_text(f"Bir hata oluştu: {error_msg[:100]} 💔")
 
 # Kayıt et
 bot_app.add_handler(CommandHandler("start", start_cmd))
@@ -135,12 +184,16 @@ async def lifespan(app: FastAPI):
     # Startup
     await bot_app.initialize()
     
-    # Instagram session setup
-    await setup_instagram_session()
+    # yt-dlp varlığını kontrol et
+    try:
+        process = await asyncio.create_subprocess_exec('yt-dlp', '--version', stdout=asyncio.subprocess.PIPE)
+        await process.communicate()
+        print("yt-dlp is available")
+    except FileNotFoundError:
+        print("WARNING: yt-dlp not found! Install with: pip install yt-dlp")
     
     # Webhook modunda çalıştır
     if WEBHOOK_URL:
-        # URL'in sonunda slash varsa kaldır
         clean_url = WEBHOOK_URL.rstrip('/')
         webhook_url = f"{clean_url}/webhook"
         await bot_app.bot.set_webhook(url=webhook_url)
@@ -158,6 +211,32 @@ async def lifespan(app: FastAPI):
 
 # FastAPI app
 app = FastAPI(lifespan=lifespan)
+
+@app.get("/")
+async def health():
+    return {"status": "ok", "message": "Bot is running with yt-dlp"}
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    """Telegram webhook endpoint"""
+    try:
+        json_data = await request.json()
+        print(f"Received webhook data: {json_data}")
+        
+        update = Update.de_json(json_data, bot_app.bot)
+        
+        if update:
+            await bot_app.process_update(update)
+            print("Update processed successfully")
+        else:
+            print("Invalid update received")
+            
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
 
 @app.get("/set-webhook")
 async def set_webhook_manually():
@@ -185,31 +264,6 @@ async def get_webhook_info():
             "last_error_message": webhook_info.last_error_message
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    """Telegram webhook endpoint"""
-    try:
-        # JSON verisini al
-        json_data = await request.json()
-        print(f"Received webhook data: {json_data}")
-        
-        # Update objesini oluştur
-        update = Update.de_json(json_data, bot_app.bot)
-        
-        if update:
-            # Update'i işle
-            await bot_app.process_update(update)
-            print("Update processed successfully")
-        else:
-            print("Invalid update received")
-            
-        return {"status": "ok"}
-    except Exception as e:
-        print(f"Webhook error: {e}")
-        import traceback
-        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
