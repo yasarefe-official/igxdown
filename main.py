@@ -41,14 +41,9 @@ async def download_instagram_video(url):
             '--format', 'best[ext=mp4]/mp4/best',
             '--output', temp_path,
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            '--add-header', 'Accept-Language:en-us,en;q=0.5',
-            '--add-header', 'Accept-Encoding:gzip,deflate',
-            '--add-header', 'Accept-Charset:ISO-8859-1,utf-8;q=0.7,*;q=0.7',
-            '--add-header', 'Connection:keep-alive',
             '--extractor-retries', '3',
             '--fragment-retries', '3',
-            '--retry-sleep', 'linear:1::2',
+            '--socket-timeout', '30',
             url
         ]
         
