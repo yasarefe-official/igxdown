@@ -1,141 +1,105 @@
 import os
-import asyncio
+import re
+import instaloader
 import tempfile
-import yt_dlp
-import aiohttp  # <<< THIS IS THE MISSING LINE
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- Environment Variables ---
+# --- Ortam Değişkenleri ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+IG_COOKIES_CONTENT = os.environ.get("IG_COOKIES") # Koyeb'e eklediğin tüm cookie metni
 
-# --- Bot and FastAPI Application ---
+# --- Instaloader Kurulumu ---
+L = instaloader.Instaloader(
+    save_metadata=False,
+    download_pictures=False,
+    download_videos=False,
+    download_video_thumbnails=False,
+    compress_json=False,
+)
+
+# --- Bot ve FastAPI Kurulumu ---
 bot_app = ApplicationBuilder().token(TOKEN).build()
-# We define the app here, but the lifespan logic is separate
-app_instance = FastAPI()
-
-
-# --------------------------------------------------------------------------- #
-# SECTION 1: THE DOWNLOAD ENGINE (OUR OWN API)                                #
-# --------------------------------------------------------------------------- #
-
-class DownloadRequest(BaseModel):
-    url: str
-
-@app_instance.post("/api/download")
-async def api_download_video(request: DownloadRequest):
-    """
-    This endpoint downloads the video from the given Instagram URL using yt-dlp
-    and returns the result directly as a video file.
-    """
-    temp_dir = tempfile.mkdtemp()
-    # Define a specific output filename
-    output_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
-    
-    ydl_opts = {
-        'outtmpl': output_template,
-        'format': 'best[ext=mp4]/best',
-        'quiet': True,
-    }
-
-    try:
-        print(f"Downloader engine starting for: {request.url}")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(request.url, download=True)
-            downloaded_file_path = ydl.prepare_filename(info_dict)
-
-        if not os.path.exists(downloaded_file_path) or os.path.getsize(downloaded_file_path) == 0:
-            raise HTTPException(status_code=404, detail="Video could not be downloaded.")
-
-        print(f"Download successful. Serving file: {downloaded_file_path}")
-        return FileResponse(path=downloaded_file_path, media_type='video/mp4', filename="video.mp4")
-
-    except Exception as e:
-        print(f"Error in downloader engine: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
-
-
-# --------------------------------------------------------------------------- #
-# SECTION 2: THE TELEGRAM BOT INTERFACE                                       #
-# --------------------------------------------------------------------------- #
+app = FastAPI()
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! Send an Instagram post link to download the video.")
+    await update.message.reply_text("Welcome. Please provide an Instagram Post/Reel URL.")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Receives the link from the user and sends a request to our own download engine.
-    """
-    url = update.message.text.strip()
-    if "instagram.com" not in url:
-        await update.message.reply_text("Please provide a valid Instagram link.")
+    """Senin orijinal, temiz kodun burada, artık kimlik doğrulamalı çalışıyor."""
+    text = update.message.text.strip()
+    match = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?]+)", text)
+    if not match:
+        await update.message.reply_text("Invalid URL. Please send a valid Instagram post link.")
         return
 
-    progress_msg = await update.message.reply_text("Processing request...")
+    shortcode = match.group(1)
+    progress_msg = await update.message.reply_text("Processing your request, please wait...")
 
-    api_endpoint = f"{WEBHOOK_URL.rstrip('/')}/api/download"
-    payload = {"url": url}
-    
-    video_path = None
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_endpoint, json=payload, timeout=300) as response:
-                if response.status == 200:
-                    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
-                        video_path = tmp.name
-                        tmp.write(await response.read())
-                    
-                    await progress_msg.edit_text("Uploading video...")
-                    with open(video_path, 'rb') as video_file:
-                        await context.bot.send_video(
-                            chat_id=update.effective_chat.id,
-                            video=video_file,
-                            caption="Video downloaded successfully.",
-                            supports_streaming=True
-                        )
-                    await progress_msg.delete()
-                else:
-                    error_data = await response.json()
-                    await progress_msg.edit_text(f"Failed to download.\nReason: {error_data.get('detail', 'Unknown error')}")
+        # L.context artık kimlik doğrulamalı olduğu için bu işlem başarılı olacak.
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
+        video_url = post.video_url
+
+        if not video_url:
+            await progress_msg.edit_text("A video could not be found in this post.")
+            return
+
+        await context.bot.send_video(
+            chat_id=update.effective_chat.id,
+            video=video_url,
+            caption="Video downloaded successfully.",
+            supports_streaming=True
+        )
+        await progress_msg.delete()
 
     except Exception as e:
-        await progress_msg.edit_text(f"A critical error occurred: {e}")
-    finally:
-        if video_path and os.path.exists(video_path):
-            os.unlink(video_path)
+        print(f"An error occurred: {e}")
+        await progress_msg.edit_text("Failed to process the request. The post may be private or an error occurred.")
 
-# --- APPLICATION LIFESPAN & STARTUP ---
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Manages the bot's lifecycle."""
-    await bot_app.initialize()
-    webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
-    await bot_app.bot.set_webhook(url=webhook_url)
-    await bot_app.start()
-    print(f"🚀 Bot v10.1 (Architect's Edition) started! Webhook: {webhook_url}")
-    yield
-    await bot_app.stop()
-    await bot_app.shutdown()
-
-# Re-assign the app with the lifespan manager
-app = FastAPI(lifespan=lifespan)
-
-# Mount the downloader engine and webhook to the final app
-app.post("/api/download")(api_download_video)
+# --- Handler'lar ve Uygulama Yaşam Döngüsü ---
 bot_app.add_handler(CommandHandler("start", start_cmd))
 bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Botu başlatır, kimlik doğrular ve kapatır."""
+    if not IG_COOKIES_CONTENT:
+        raise ValueError("CRITICAL: IG_COOKIES environment variable is not set!")
+
+    # Geçici bir dosyaya cookie'leri yazarak Instaloader'a kimlik sağlıyoruz.
+    cookie_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
+    try:
+        cookie_file.write(IG_COOKIES_CONTENT)
+        cookie_file.close() 
+        print(f"Cookies loaded into temporary file: {cookie_file.name}")
+        
+        # Instaloader'a bu cookie dosyası ile giriş yapmasını söylüyoruz.
+        L.context.load_cookies_from_file(cookie_file.name)
+        print("Instaloader session authenticated using cookies.")
+
+        await bot_app.initialize()
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
+        await bot_app.bot.set_webhook(url=webhook_url)
+        await bot_app.start()
+        print(f"🚀 Bot (Instaloader with Login) started! Webhook: {webhook_url}")
+        yield
+    finally:
+        # Uygulama kapandığında geçici dosyayı temizliyoruz.
+        os.unlink(cookie_file.name)
+        print("Temporary cookie file cleaned up.")
+        await bot_app.stop()
+        await bot_app.shutdown()
+
+app = FastAPI(lifespan=lifespan)
+
 @app.post("/webhook")
 async def webhook(request: Request):
-    """Receives updates from Telegram and forwards them to the bot."""
     update = Update.de_json(await request.json(), bot_app.bot)
     await bot_app.process_update(update)
     return {"status": "ok"}
