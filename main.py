@@ -15,7 +15,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# Env'den al ngl
+# Env'den al
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
@@ -25,7 +25,7 @@ bot_app = ApplicationBuilder().token(TOKEN).build()
 
 # Rate limiting için son istek zamanı
 last_request_time = 0
-REQUEST_DELAY = 5  # saniye
+REQUEST_DELAY = 3  # saniye
 
 async def download_instagram_video(url):
     """yt-dlp kullanarak Instagram video indirme"""
@@ -34,14 +34,21 @@ async def download_instagram_video(url):
         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
             temp_path = temp_file.name
         
-        # yt-dlp komutu
+        # yt-dlp komutu - cookies kullanmadan
         cmd = [
             'yt-dlp',
             '--no-playlist',
-            '--format', 'best[ext=mp4]',
+            '--format', 'best[ext=mp4]/mp4/best',
             '--output', temp_path,
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            '--cookies-from-browser', 'chrome',  # Chrome cookies kullan
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            '--add-header', 'Accept-Language:en-us,en;q=0.5',
+            '--add-header', 'Accept-Encoding:gzip,deflate',
+            '--add-header', 'Accept-Charset:ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+            '--add-header', 'Connection:keep-alive',
+            '--extractor-retries', '3',
+            '--fragment-retries', '3',
+            '--retry-sleep', 'linear:1::2',
             url
         ]
         
@@ -54,10 +61,13 @@ async def download_instagram_video(url):
         
         stdout, stderr = await process.communicate()
         
-        if process.returncode == 0:
+        if process.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
             return temp_path
         else:
             print(f"yt-dlp error: {stderr.decode()}")
+            # Dosya varsa sil
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
             return None
             
     except Exception as e:
@@ -71,6 +81,7 @@ async def get_video_info(url):
             'yt-dlp',
             '--dump-json',
             '--no-playlist',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             url
         ]
         
@@ -97,7 +108,14 @@ async def get_video_info(url):
 
 # Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Yo dawg, reel linkini at ts, beni test et 🔥\n\n✨ Artık daha güvenilir yöntem kullanıyorum!")
+    await update.message.reply_text(
+        "🔥 Instagram Video İndirici Bot\n\n"
+        "📱 Bir Instagram reel/post linkini gönderin, size videoyu indireyim!\n\n"
+        "✨ Desteklenen formatlar:\n"
+        "• instagram.com/reel/...\n"
+        "• instagram.com/p/...\n\n"
+        "⚡ Hızlı ve güvenilir!"
+    )
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global last_request_time
@@ -106,18 +124,29 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Instagram URL pattern'ları
     instagram_patterns = [
-        r'instagram\.com/(?:p|reel)/([^/?]+)',
-        r'instagram\.com/(?:p|reel)/([^/?]+)/?\?.*',
+        r'(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)',
+        r'(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)/?\?.*',
     ]
     
     found_url = None
     for pattern in instagram_patterns:
-        if re.search(pattern, txt):
-            found_url = txt
+        match = re.search(pattern, txt)
+        if match:
+            # URL'yi normalize et
+            post_id = match.group(1)
+            if '/reel/' in txt:
+                found_url = f"https://www.instagram.com/reel/{post_id}/"
+            else:
+                found_url = f"https://www.instagram.com/p/{post_id}/"
             break
     
     if not found_url:
-        await update.message.reply_text("Geçerli Instagram reel/post URL'si at ts 🙏")
+        await update.message.reply_text(
+            "❌ Geçerli bir Instagram reel/post URL'si göndermelisiniz!\n\n"
+            "Örnek:\n"
+            "• https://www.instagram.com/reel/ABC123/\n"
+            "• https://www.instagram.com/p/ABC123/"
+        )
         return
 
     # Rate limiting
@@ -129,7 +158,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     last_request_time = time.time()
     
-    progress_msg = await update.message.reply_text("Video indiriliyor... 📥")
+    progress_msg = await update.message.reply_text("⏳ Video indiriliyor... Lütfen bekleyin...")
     
     try:
         # Video bilgilerini al
@@ -142,37 +171,61 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Video boyutunu kontrol et (Telegram limiti ~50MB)
             file_size = os.path.getsize(video_path)
             if file_size > 50 * 1024 * 1024:  # 50MB
-                await progress_msg.edit_text("Video çok büyük! (>50MB) 😔")
+                await progress_msg.edit_text("❌ Video çok büyük! (>50MB)")
                 os.unlink(video_path)
                 return
             
-            await progress_msg.edit_text("Video gönderiliyor... 📤")
+            if file_size == 0:
+                await progress_msg.edit_text("❌ Video dosyası boş!")
+                os.unlink(video_path)
+                return
+            
+            await progress_msg.edit_text("📤 Video gönderiliyor...")
             
             # Caption oluştur
-            caption = "📱 İndirilen reel/video"
+            caption = "📱 Instagram Video İndirildi"
             if info:
-                caption = f"📱 {info['title'][:100]}\n👤 @{info['uploader']}"
+                title = info['title'][:50] + "..." if len(info['title']) > 50 else info['title']
+                caption = f"📱 {title}\n👤 {info['uploader']}"
             
             # Video gönder
-            with open(video_path, 'rb') as video_file:
-                await context.bot.send_video(
-                    chat_id=update.effective_chat.id,
-                    video=video_file,
-                    supports_streaming=True,
-                    caption=caption
-                )
+            try:
+                with open(video_path, 'rb') as video_file:
+                    await context.bot.send_video(
+                        chat_id=update.effective_chat.id,
+                        video=video_file,
+                        supports_streaming=True,
+                        caption=caption,
+                        read_timeout=60,
+                        write_timeout=60
+                    )
+                
+                await progress_msg.delete()
+                
+            except Exception as send_error:
+                print(f"Send error: {send_error}")
+                await progress_msg.edit_text("❌ Video gönderilirken hata oluştu!")
             
             # Geçici dosyayı sil
-            os.unlink(video_path)
-            await progress_msg.delete()
+            try:
+                os.unlink(video_path)
+            except:
+                pass
             
         else:
-            await progress_msg.edit_text("Video indirilemedi 😔\n\nMümkün nedenler:\n• Video özel hesapta\n• Link geçersiz\n• Instagram rate limit")
+            await progress_msg.edit_text(
+                "❌ Video indirilemedi!\n\n"
+                "Olası nedenler:\n"
+                "• Video özel hesapta olabilir\n"
+                "• Link geçersiz olabilir\n"
+                "• Instagram erişimi engellenmiş olabilir\n"
+                "• Video artık mevcut olmayabilir"
+            )
             
     except Exception as e:
         error_msg = str(e)
         print(f"Error in handle_msg: {error_msg}")
-        await progress_msg.edit_text(f"Bir hata oluştu: {error_msg[:100]} 💔")
+        await progress_msg.edit_text(f"❌ Hata oluştu: {error_msg[:100]}")
 
 # Kayıt et
 bot_app.add_handler(CommandHandler("start", start_cmd))
@@ -187,8 +240,8 @@ async def lifespan(app: FastAPI):
     # yt-dlp varlığını kontrol et
     try:
         process = await asyncio.create_subprocess_exec('yt-dlp', '--version', stdout=asyncio.subprocess.PIPE)
-        await process.communicate()
-        print("yt-dlp is available")
+        stdout, _ = await process.communicate()
+        print(f"yt-dlp version: {stdout.decode().strip()}")
     except FileNotFoundError:
         print("WARNING: yt-dlp not found! Install with: pip install yt-dlp")
     
@@ -214,23 +267,19 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 async def health():
-    return {"status": "ok", "message": "Bot is running with yt-dlp"}
+    return {"status": "ok", "message": "Instagram Video Downloader Bot is running"}
 
 @app.post("/webhook")
 async def webhook(request: Request):
     """Telegram webhook endpoint"""
     try:
         json_data = await request.json()
-        print(f"Received webhook data: {json_data}")
         
         update = Update.de_json(json_data, bot_app.bot)
         
         if update:
             await bot_app.process_update(update)
-            print("Update processed successfully")
-        else:
-            print("Invalid update received")
-            
+        
         return {"status": "ok"}
     except Exception as e:
         print(f"Webhook error: {e}")
