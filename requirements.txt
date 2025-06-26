@@ -2,4 +2,4 @@ fastapi==0.95.1
 uvicorn==0.22.0
 python-telegram-bot==20.5
 instaloader==4.13.0
-ytdlp
+yt-dlp
