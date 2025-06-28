@@ -13,7 +13,6 @@ PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 
 # --- GÜVENİLİR VE ÜCRETSİZ API BİLGİSİ ---
-# Bu, iGram.io'nun kullandığı ve anahtar gerektirmeyen kendi iç API'sidir.
 DOWNLOADER_API_URL = "https://v3.igdownloader.app/api/ajaxSearch"
 
 # --- Bot ve FastAPI Kurulumu ---
@@ -23,7 +22,6 @@ app = FastAPI()
 async def get_download_link(url: str):
     """
     iGram'in dahili API'sini kullanarak Instagram videosu indirme linkini alır.
-    Bu yöntem anahtarsız, kimliksiz, ücretsiz ve stabildir.
     """
     payload = {'q': url, 't': 'media'}
     headers = {
@@ -32,13 +30,17 @@ async def get_download_link(url: str):
         'Referer': 'https://igram.io/'
     }
     
+    # <<< BU SATIR DÜZELTİLDİ >>>
+    # Hata mesajının tam olarak belirttiği gibi, timeout parametresi
+    # basit bir sayı değil, bir ClientTimeout nesnesi olmalıdır.
+    timeout_config = aiohttp.ClientTimeout(total=60)
+    
     try:
-        async with aiohttp.ClientSession(timeout=60) as session:
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
             async with session.post(DOWNLOADER_API_URL, data=payload, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("status") == "ok":
-                        # API'den gelen HTML içinden video linkini Regex ile çekiyoruz.
                         match = re.search(r'href="([^"]+)" class="abutton is-success is-fullwidth"', data.get("data", ""))
                         if match:
                             return match.group(1), None
@@ -67,11 +69,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Bu sefer dosyayı indirmiyoruz, direkt URL'yi Telegram'a veriyoruz.
-        # Bu daha hızlı ve daha verimlidir.
         await context.bot.send_video(
             chat_id=update.effective_chat.id,
-            video=video_url, # Telegram'a direkt linki veriyoruz
+            video=video_url,
             caption="Video downloaded successfully.",
             supports_streaming=True
         )
@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
-    print(f"🚀 Bot (Simple & Final) started! Webhook: {webhook_url}")
+    print(f"🚀 Bot (Simple & Final, Corrected) started! Webhook: {webhook_url}")
     yield
     await bot_app.stop()
     await bot_app.shutdown()
