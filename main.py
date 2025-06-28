@@ -22,7 +22,6 @@ from sqlalchemy.ext.declarative import declarative_base
 import instaloader
 
 # --- TEMEL AYARLAR ---
-# Logging ayarlarını en başa alarak her şeyi görebilmemizi sağlıyoruz.
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -35,20 +34,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 KOYEB_PUBLIC_URL = os.getenv("KOYEB_PUBLIC_URL")
 SECRET_KEY = os.getenv("SECRET_KEY", "bir-varsayilan-gizli-anahtar-ekleyin")
 
-# --- ORTAM DEĞİŞKENLERİ TEŞHİSİ ---
-# Uygulama başlamadan önce kritik değişkenlerin durumunu kontrol edelim.
-logger.info("--- ORTAM DEĞİŞKENLERİ KONTROL EDİLİYOR ---")
-logger.info(f"TELEGRAM_TOKEN ayarlı mı? -> {bool(TELEGRAM_TOKEN)}")
-logger.info(f"KOYEB_PUBLIC_URL ayarlı mı? -> {bool(KOYEB_PUBLIC_URL)}")
-if DATABASE_URL:
-    logger.info("DATABASE_URL ayarlı. Başlangıcı: %s...", DATABASE_URL[:30])
-else:
-    # Eğer bu logu görüyorsanız, Koyeb'de DATABASE_URL değişkeni ya yok ya da boş.
-    logger.error("!!! KRİTİK HATA: DATABASE_URL ORTAM DEĞİŞKENİ BULUNAMADI !!!")
-logger.info("--- KONTROL TAMAMLANDI ---")
+# !!!!! YENİ ÇÖZÜM KODU !!!!!
+# SQLAlchemy'nin doğru lehçeyi tanıması için URL'yi manuel olarak düzeltiyoruz.
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    logger.info("Database URL, 'postgresql://' lehçesini kullanacak şekilde güncellendi.")
 
+# --- KRİTİK DEĞİŞKEN KONTROLÜ ---
 if not all([TELEGRAM_TOKEN, DATABASE_URL, KOYEB_PUBLIC_URL]):
-    logger.critical("Gerekli ortam değişkenleri eksik. Uygulama başlatılamıyor.")
+    logger.critical("Gerekli ortam değişkenleri (TELEGRAM_TOKEN, DATABASE_URL, KOYEB_PUBLIC_URL) eksik. Uygulama başlatılamıyor.")
     exit()
 
 # --- VERİTABANI KURULUMU (SQLAlchemy) ---
@@ -57,11 +51,12 @@ Base = declarative_base()
 class UserSession(Base):
     __tablename__ = 'user_sessions'
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(String, unique=True, nullable=False) # String olarak saklamak daha güvenli
+    telegram_id = Column(String, unique=True, nullable=False)
     insta_username = Column(String(100), nullable=False)
     session_data = Column(Text, nullable=False)
 
 try:
+    # Güncellenmiş DATABASE_URL ile bağlantı kurmayı deniyoruz.
     engine = create_engine(DATABASE_URL)
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -136,7 +131,6 @@ def download_video_handler(update: Update, context: CallbackContext):
         shortcode = url.split("/")[-2]
         post = instaloader.Post.from_shortcode(L.context, shortcode)
 
-        # İndirme için geçici ve benzersiz bir klasör
         target_dir = f"temp_{uuid4()}"
         L.download_post(post, target=target_dir)
 
@@ -157,7 +151,6 @@ def download_video_handler(update: Update, context: CallbackContext):
         logger.error(f"Video indirme hatası: {e}", exc_info=True)
         msg.edit_text(f"Üzgünüm, bir hata oluştu. Linkin doğru olduğundan emin misin?\nHata: {str(e)}")
     finally:
-        # Temizlik
         if 'target_dir' in locals() and os.path.exists(target_dir):
             for f in os.listdir(target_dir):
                 os.remove(os.path.join(target_dir, f))
@@ -215,7 +208,6 @@ async def handle_login(
 # --- UYGULAMA BAŞLANGIÇ NOKTASI ---
 @app.on_event("startup")
 async def on_startup():
-    # Telegram webhook'unu ayarla
     webhook_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
     current_webhook = await bot.get_webhook_info()
     if current_webhook.url != webhook_url:
@@ -224,7 +216,6 @@ async def on_startup():
     else:
         logger.info("Webhook zaten doğru şekilde ayarlanmış.")
 
-    # Telegram handler'larını dispatcher'a ekle
     dispatcher.add_handler(CommandHandler('start', start_command))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, download_video_handler))
     logger.info("Telegram handler'ları eklendi.")
