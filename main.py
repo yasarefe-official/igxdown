@@ -1,6 +1,7 @@
 import os
 import re
 import aiohttp
+import random
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -12,44 +13,70 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 
-# --- GÜVENİLİR VE ÜCRETSİZ API BİLGİSİ ---
-DOWNLOADER_API_URL = "https://v3.igdownloader.app/api/ajaxSearch"
+# --- GÜVENİLİR, ANAHTARSIZ VE FARKLI API'LER LİSTESİ ---
+# Bu API'ler, botun hayatta kalmasını sağlar. Biri çökerse diğeri devreye girer.
+DOWNLOADER_APIS = [
+    {
+        "name": "SSSInstagram",
+        "url": "https://sssinstagram.com/request",
+        "method": "POST",
+    },
+    {
+        "name": "iGram",
+        "url": "https://v3.igdownloader.app/api/ajaxSearch",
+        "method": "POST",
+    }
+]
 
 # --- Bot ve FastAPI Kurulumu ---
 bot_app = ApplicationBuilder().token(TOKEN).build()
 app = FastAPI()
 
-async def get_download_link(url: str):
+async def get_video_link(url: str):
     """
-    iGram'in dahili API'sini kullanarak Instagram videosu indirme linkini alır.
+    Farklı API'leri deneyerek video indirme linki bulmaya çalışır.
+    Bu, botun tek bir servise bağımlı kalmasını engeller.
     """
-    payload = {'q': url, 't': 'media'}
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36',
-        'Origin': 'https://igram.io',
-        'Referer': 'https://igram.io/'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
     }
+    timeout_config = aiohttp.ClientTimeout(total=45)
     
-    # <<< BU SATIR DÜZELTİLDİ >>>
-    # Hata mesajının tam olarak belirttiği gibi, timeout parametresi
-    # basit bir sayı değil, bir ClientTimeout nesnesi olmalıdır.
-    timeout_config = aiohttp.ClientTimeout(total=60)
-    
-    try:
-        async with aiohttp.ClientSession(timeout=timeout_config) as session:
-            async with session.post(DOWNLOADER_API_URL, data=payload, headers=headers) as response:
-                if response.status == 200:
+    # API listesini karıştırarak her seferinde farklı bir sırayla denemesini sağlıyoruz.
+    random.shuffle(DOWNLOADER_APIS)
+
+    for api in DOWNLOADER_APIS:
+        try:
+            print(f"Trying API: {api['name']}...")
+            payload = {'url': url} if api['name'] == 'SSSInstagram' else {'q': url, 't': 'media'}
+            
+            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                async with session.post(api['url'], data=payload, headers=headers) as response:
+                    if response.status != 200:
+                        print(f"API '{api['name']}' returned status {response.status}. Trying next...")
+                        continue
+
                     data = await response.json()
-                    if data.get("status") == "ok":
-                        match = re.search(r'href="([^"]+)" class="abutton is-success is-fullwidth"', data.get("data", ""))
-                        if match:
-                            return match.group(1), None
-                    return None, "Video linki alınamadı. Link özel veya geçersiz olabilir."
-                else:
-                    return None, f"İndirme servisi yanıt vermiyor (Hata: {response.status})."
-    except Exception as e:
-        print(f"API hatası: {e}")
-        return None, "Beklenmedik bir hata oluştu."
+
+                    if api['name'] == 'SSSInstagram':
+                        if data.get("success") and data.get("result", {}).get("download_links"):
+                            print(f"Success with {api['name']}!")
+                            return data["result"]["download_links"][0]["url"], None
+                    
+                    elif api['name'] == 'iGram':
+                        if data.get("status") == "ok":
+                            html_content = data.get("data", "")
+                            match = re.search(r'href="([^"]+)" class="abutton is-success is-fullwidth"', html_content)
+                            if match:
+                                print(f"Success with {api['name']}!")
+                                return match.group(1), None
+            
+        except Exception as e:
+            print(f"API '{api['name']}' failed with error: {e}. Trying next...")
+            continue
+
+    return None, "Tüm indirme servisleri şu anda meşgul veya ulaşılamıyor. Lütfen daha sonra tekrar deneyin."
+
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome. Send an Instagram link to download the video.")
@@ -62,23 +89,26 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     progress_msg = await update.message.reply_text("Processing...")
     
-    video_url, error = await get_download_link(url)
+    video_url, error = await get_video_link(url)
 
     if error:
         await progress_msg.edit_text(f"Failed to download.\nReason: {error}")
         return
 
     try:
+        # En verimli yöntem: Dosyayı sunucuya hiç indirmeden, direkt URL'yi Telegram'a göndermek.
         await context.bot.send_video(
             chat_id=update.effective_chat.id,
             video=video_url,
             caption="Video downloaded successfully.",
-            supports_streaming=True
+            supports_streaming=True,
+            read_timeout=60, # Telegram'a URL'yi işlemesi için zaman tanıyoruz.
+            connect_timeout=60,
         )
         await progress_msg.delete()
     except Exception as e:
-        print(f"Telegram'a gönderme hatası: {e}")
-        await progress_msg.edit_text("An error occurred while sending the video to Telegram.")
+        print(f"Error sending video to Telegram: {e}")
+        await progress_msg.edit_text("An error occurred while sending the video. The link might have expired.")
 
 # --- Uygulama Yaşam Döngüsü ve Webhook ---
 @asynccontextmanager
@@ -87,7 +117,7 @@ async def lifespan(app: FastAPI):
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
-    print(f"🚀 Bot (Simple & Final, Corrected) started! Webhook: {webhook_url}")
+    print(f"🚀 Bot (Resilient & Final) started! Webhook: {webhook_url}")
     yield
     await bot_app.stop()
     await bot_app.shutdown()
