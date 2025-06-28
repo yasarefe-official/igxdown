@@ -1,7 +1,7 @@
 import os
 import logging
 from uuid import uuid4
-from urllib.parse import quote_plus  # <-- YENİ İMPORT
+from urllib.parse import quote_plus
 
 # --- Web Framework ve Sunucu ---
 from fastapi import FastAPI, Request, Form
@@ -14,6 +14,7 @@ from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, Ca
 
 # --- Instagram İndirici ---
 import instaloader
+from instaloader.exceptions import LoginException # <-- Hata yakalamak için özel import
 
 # --- TEMEL AYARLAR ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -47,13 +48,9 @@ def link_handler(update: Update, context: CallbackContext):
         update.message.reply_text("Lütfen geçerli bir Instagram video linki gönderin.")
         return
 
-    # !!!!! YENİ DÜZELTME BURADA !!!!!
-    # URL'yi, başka bir URL'nin içine gömmeden önce güvenli hale getiriyoruz.
     encoded_video_url = quote_plus(video_url)
-    
     auth_page_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/auth?user_id={user_id}&video_url={encoded_video_url}"
-    # !!!!! DÜZELTME BİTTİ !!!!!
-
+    
     message = (
         "Harika! Bu videoyu indirmek için aşağıdaki linke tıklayıp Instagram bilgilerinizle giriş yapın:\n\n"
         f"<a href='{auth_page_url}'><b>BU LİNKE TIKLA VE GİRİŞ YAP</b></a>\n\n"
@@ -61,11 +58,10 @@ def link_handler(update: Update, context: CallbackContext):
     )
     update.message.reply_html(message, disable_web_page_preview=True)
 
-# --- HATA YAKALAMA HANDLER'I (İYİ BİR ALIŞKANLIK) ---
 def error_handler(update: Update, context: CallbackContext):
-    logger.error(f"Update '{update}' caused error '{context.error}'")
+    logger.error(f"Update '{update}' caused error '{context.error}'", exc_info=context.error)
 
-# --- FastAPI ROUTE'LARI (WEB ARAYÜZÜ) ---
+# --- FastAPI ROUTE'LARI ---
 @app.post(f'/{TELEGRAM_TOKEN}')
 async def process_telegram_update(request: Request):
     data = await request.json()
@@ -75,8 +71,6 @@ async def process_telegram_update(request: Request):
 
 @app.get("/auth", response_class=HTMLResponse)
 async def auth_page(request: Request, user_id: str, video_url: str):
-    # video_url burada encode edilmiş halde gelir, template'e normal halini gönderiyoruz.
-    # Tarayıcılar bunu otomatik olarak çözer.
     return templates.TemplateResponse("auth.html", {"request": request, "user_id": user_id, "video_url": video_url})
 
 @app.post("/download")
@@ -112,17 +106,46 @@ async def handle_download(
                 break
         
         if video_path:
-            logger.info(f"Video bulundu: {video_path}. Telegram'a gönderiliyor.")
             with open(video_path, 'rb') as video_file:
                 bot.send_video(chat_id=user_id, video=video_file, caption="İşte videon! ✅")
             return HTMLResponse(content="<h1>Başarılı!</h1><p>Videonuz Telegram botuna gönderildi. Bu pencereyi kapatabilirsiniz.</p>")
         else:
-            bot.send_message(chat_id=user_id, text="Hata: Video indirildi ancak dosya bulunamadı. 😕")
-            return HTMLResponse(content="<h1>Hata!</h1><p>Video indirildi ancak dosya bulunamadı.</p>", status_code=500)
+            raise FileNotFoundError("İndirilen video dosyası sunucuda bulunamadı.")
 
+    # !!!!! İŞTE SİHİR BURADA BAŞLIYOR !!!!!
+    except LoginException as e:
+        error_message = str(e)
+        logger.warning(f"LoginException yakalandı: {error_message}")
+        
+        # Checkpoint hatasını özel olarak ele alıyoruz
+        if "Checkpoint required" in error_message:
+            try:
+                # Hata metninden URL'i çekip çıkarıyoruz
+                challenge_url = error_message.split("https://")[1].split(" - ")[0]
+                challenge_url = "https://" + challenge_url
+                
+                # Kullanıcıya özel onay linkini gönderiyoruz
+                bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "<b>❗️ ÖNEMLİ: GÜVENLİK ONAYI GEREKİYOR ❗️</b>\n\n"
+                        "Instagram, bu giriş denemesini onaylamanızı istiyor. Lütfen aşağıdaki linke tıklayın, açılan sayfada 'Bu Bendim' seçeneğini işaretleyin ve ardından web sayfasındaki 'İndir' butonuna <b>tekrar basın.</b>\n\n"
+                        f"<a href='{challenge_url}'><b>GÜVENLİK ONAYI İÇİN TIKLA</b></a>"
+                    ),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                return HTMLResponse(content="<h1>Onay Gerekli!</h1><p>Giriş yapabilmek için Telegram botuna gönderilen onay linkine tıklamanız gerekiyor. Onayı verdikten sonra bu sayfaya geri dönüp tekrar 'İndir' butonuna basın.</p>", status_code=403)
+            except Exception as url_exc:
+                logger.error(f"Checkpoint URL'i çıkarılamadı: {url_exc}")
+        
+        # Diğer tüm giriş hataları için genel bir mesaj
+        bot.send_message(chat_id=user_id, text=f"Giriş işlemi başarısız oldu. 😞\n\n<b>Hata:</b> Bilgilerinizi kontrol edin.", parse_mode="HTML")
+        return HTMLResponse(content=f"<h1>Hata!</h1><p>Giriş başarısız oldu: Bilgilerinizi kontrol edin.</p>", status_code=401)
+        
     except Exception as e:
-        logger.error(f"İndirme işlemi sırasında hata ({username}): {e}", exc_info=True)
-        bot.send_message(chat_id=user_id, text=f"İndirme işlemi başarısız oldu. 😞\n\n<b>Hata:</b> {type(e).__name__}", parse_mode="HTML")
+        logger.error(f"Genel indirme hatası ({username}): {e}", exc_info=True)
+        bot.send_message(chat_id=user_id, text=f"İndirme işlemi sırasında beklenmedik bir hata oluştu. 😞\n\n<b>Hata:</b> {type(e).__name__}", parse_mode="HTML")
         return HTMLResponse(content=f"<h1>Hata!</h1><p>İşlem başarısız oldu: {e}</p>", status_code=500)
     finally:
         if 'target_dir' in locals() and os.path.exists(target_dir):
@@ -139,6 +162,6 @@ def on_startup():
     
     dispatcher.add_handler(CommandHandler('start', start_command))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, link_handler))
-    dispatcher.add_error_handler(error_handler) # Hataları yakalamak için handler ekledik.
+    dispatcher.add_error_handler(error_handler)
     
     logger.info(f"Uygulama başlatıldı. Webhook ayarlandı: {webhook_url}")
