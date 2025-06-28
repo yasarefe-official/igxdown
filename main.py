@@ -1,6 +1,7 @@
 import os
 import logging
 from uuid import uuid4
+from urllib.parse import quote_plus  # <-- YENİ İMPORT
 
 # --- Web Framework ve Sunucu ---
 from fastapi import FastAPI, Request, Form
@@ -46,13 +47,23 @@ def link_handler(update: Update, context: CallbackContext):
         update.message.reply_text("Lütfen geçerli bir Instagram video linki gönderin.")
         return
 
-    auth_page_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/auth?user_id={user_id}&video_url={video_url}"
+    # !!!!! YENİ DÜZELTME BURADA !!!!!
+    # URL'yi, başka bir URL'nin içine gömmeden önce güvenli hale getiriyoruz.
+    encoded_video_url = quote_plus(video_url)
+    
+    auth_page_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/auth?user_id={user_id}&video_url={encoded_video_url}"
+    # !!!!! DÜZELTME BİTTİ !!!!!
+
     message = (
         "Harika! Bu videoyu indirmek için aşağıdaki linke tıklayıp Instagram bilgilerinizle giriş yapın:\n\n"
-        f"<a href='{auth_page_url}'><b>BU LİNKE TIKLA</b></a>\n\n"
+        f"<a href='{auth_page_url}'><b>BU LİNKE TIKLA VE GİRİŞ YAP</b></a>\n\n"
         "Giriş bilgileriniz sadece bu indirme için kullanılacak ve asla kaydedilmeyecektir."
     )
     update.message.reply_html(message, disable_web_page_preview=True)
+
+# --- HATA YAKALAMA HANDLER'I (İYİ BİR ALIŞKANLIK) ---
+def error_handler(update: Update, context: CallbackContext):
+    logger.error(f"Update '{update}' caused error '{context.error}'")
 
 # --- FastAPI ROUTE'LARI (WEB ARAYÜZÜ) ---
 @app.post(f'/{TELEGRAM_TOKEN}')
@@ -64,6 +75,8 @@ async def process_telegram_update(request: Request):
 
 @app.get("/auth", response_class=HTMLResponse)
 async def auth_page(request: Request, user_id: str, video_url: str):
+    # video_url burada encode edilmiş halde gelir, template'e normal halini gönderiyoruz.
+    # Tarayıcılar bunu otomatik olarak çözer.
     return templates.TemplateResponse("auth.html", {"request": request, "user_id": user_id, "video_url": video_url})
 
 @app.post("/download")
@@ -86,7 +99,7 @@ async def handle_download(
         L.login(username, password)
         logger.info("Giriş başarılı.")
 
-        shortcode = video_url.split("/")[-2]
+        shortcode = video_url.split("instagram.com/p/")[-1].split("instagram.com/reel/")[-1].split("/")[0]
         post = instaloader.Post.from_shortcode(L.context, shortcode)
 
         target_dir = f"temp_{uuid4()}"
@@ -109,7 +122,7 @@ async def handle_download(
 
     except Exception as e:
         logger.error(f"İndirme işlemi sırasında hata ({username}): {e}", exc_info=True)
-        bot.send_message(chat_id=user_id, text=f"İndirme işlemi başarısız oldu. 😞\n\n<b>Hata:</b> {e}", parse_mode="HTML")
+        bot.send_message(chat_id=user_id, text=f"İndirme işlemi başarısız oldu. 😞\n\n<b>Hata:</b> {type(e).__name__}", parse_mode="HTML")
         return HTMLResponse(content=f"<h1>Hata!</h1><p>İşlem başarısız oldu: {e}</p>", status_code=500)
     finally:
         if 'target_dir' in locals() and os.path.exists(target_dir):
@@ -120,12 +133,12 @@ async def handle_download(
 
 # --- UYGULAMA BAŞLANGIÇ NOKTASI ---
 @app.on_event("startup")
-def on_startup():  # Bu fonksiyonu async olmaktan çıkardık
+def on_startup():
     webhook_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
-    # 'await' kelimesini buradan kaldırdık.
     bot.set_webhook(url=webhook_url)
     
     dispatcher.add_handler(CommandHandler('start', start_command))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, link_handler))
+    dispatcher.add_error_handler(error_handler) # Hataları yakalamak için handler ekledik.
     
     logger.info(f"Uygulama başlatıldı. Webhook ayarlandı: {webhook_url}")
