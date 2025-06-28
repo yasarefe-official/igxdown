@@ -3,6 +3,7 @@ import re
 import aiohttp
 import random
 import json
+import asyncio
 from contextlib import asynccontextmanager
 from urllib.parse import quote, unquote
 
@@ -75,7 +76,7 @@ DOWNLOADER_APIS = [
 ]
 
 # --- Bot ve FastAPI Kurulumu ---
-bot_app = ApplicationBuilder().token(TOKEN).build()
+bot_app = None
 app = FastAPI()
 
 def extract_instagram_id(url: str):
@@ -123,7 +124,7 @@ def extract_video_urls_from_html(html_content: str):
 
 async def try_fastdl_api(url: str):
     """FastDL API'sini dener"""
-    timeout_config = aiohttp.ClientTimeout(total=20)
+    timeout_config = aiohttp.ClientTimeout(total=30)
     
     try:
         payload = {
@@ -135,7 +136,8 @@ async def try_fastdl_api(url: str):
             async with session.post(
                 DOWNLOADER_APIS[0]['url'],
                 data=payload,
-                headers=DOWNLOADER_APIS[0]['headers']
+                headers=DOWNLOADER_APIS[0]['headers'],
+                ssl=False  # SSL doğrulama sorunlarını önlemek için
             ) as response:
                 
                 if response.status == 200:
@@ -151,7 +153,7 @@ async def try_fastdl_api(url: str):
 
 async def try_snapins_api(url: str):
     """Snapins API'sini dener"""
-    timeout_config = aiohttp.ClientTimeout(total=15)
+    timeout_config = aiohttp.ClientTimeout(total=25)
     
     try:
         payload = {
@@ -163,7 +165,8 @@ async def try_snapins_api(url: str):
             async with session.post(
                 DOWNLOADER_APIS[1]['url'],
                 json=payload,
-                headers=DOWNLOADER_APIS[1]['headers']
+                headers=DOWNLOADER_APIS[1]['headers'],
+                ssl=False
             ) as response:
                 
                 if response.status == 200:
@@ -191,7 +194,7 @@ async def try_snapins_api(url: str):
 
 async def try_indown_api(url: str):
     """InDown API'sini dener"""
-    timeout_config = aiohttp.ClientTimeout(total=15)
+    timeout_config = aiohttp.ClientTimeout(total=25)
     
     try:
         payload = {
@@ -203,7 +206,8 @@ async def try_indown_api(url: str):
             async with session.post(
                 DOWNLOADER_APIS[2]['url'],
                 data=payload,
-                headers=DOWNLOADER_APIS[2]['headers']
+                headers=DOWNLOADER_APIS[2]['headers'],
+                ssl=False
             ) as response:
                 
                 if response.status == 200:
@@ -219,7 +223,7 @@ async def try_indown_api(url: str):
 
 async def try_savefrom_api(url: str):
     """SaveFrom API'sini dener"""
-    timeout_config = aiohttp.ClientTimeout(total=15)
+    timeout_config = aiohttp.ClientTimeout(total=25)
     
     try:
         payload = {
@@ -232,7 +236,8 @@ async def try_savefrom_api(url: str):
             async with session.post(
                 DOWNLOADER_APIS[4]['url'],
                 json=payload,
-                headers=DOWNLOADER_APIS[4]['headers']
+                headers=DOWNLOADER_APIS[4]['headers'],
+                ssl=False
             ) as response:
                 
                 if response.status == 200:
@@ -262,10 +267,10 @@ async def get_video_link(url: str):
     
     # API denemelerini tanımla
     api_attempts = [
-        ("FastDL", try_fastdl_api),
-        ("Snapins", try_snapins_api),
         ("InDown", try_indown_api),
-        ("SaveFrom", try_savefrom_api)
+        ("SaveFrom", try_savefrom_api),
+        ("FastDL", try_fastdl_api),
+        ("Snapins", try_snapins_api)
     ]
     
     # API'leri rastgele sırada dene
@@ -296,9 +301,9 @@ async def is_valid_video_url(url: str):
         return False
         
     try:
-        timeout_config = aiohttp.ClientTimeout(total=8)
+        timeout_config = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
-            async with session.head(url) as response:
+            async with session.head(url, ssl=False) as response:
                 content_type = response.headers.get('content-type', '').lower()
                 content_length = int(response.headers.get('content-length', 0))
                 
@@ -307,10 +312,10 @@ async def is_valid_video_url(url: str):
     except:
         # HEAD request başarısızsa GET ile küçük bir kısım indirmeyi dene
         try:
-            timeout_config = aiohttp.ClientTimeout(total=5)
+            timeout_config = aiohttp.ClientTimeout(total=8)
             async with aiohttp.ClientSession(timeout=timeout_config) as session:
                 headers = {'Range': 'bytes=0-1023'}  # İlk 1KB
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, ssl=False) as response:
                     return response.status in [200, 206]  # 206 = Partial Content
         except:
             return False
@@ -361,18 +366,32 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await progress_msg.edit_text("✅ Video found! Sending...")
 
         # Video gönder
-        await context.bot.send_video(
-            chat_id=update.effective_chat.id,
-            video=video_url,
-            caption="✅ <b>Downloaded successfully!</b>\n\n💯 <i>Free & Unlimited!</i>",
-            supports_streaming=True,
-            parse_mode='HTML',
-            read_timeout=180, 
-            connect_timeout=60,
-            write_timeout=180
-        )
-        
-        await progress_msg.delete()
+        try:
+            await context.bot.send_video(
+                chat_id=update.effective_chat.id,
+                video=video_url,
+                caption="✅ <b>Downloaded successfully!</b>\n\n💯 <i>Free & Unlimited!</i>",
+                supports_streaming=True,
+                parse_mode='HTML',
+                read_timeout=300,  # 5 dakika
+                connect_timeout=60,
+                write_timeout=300,  # 5 dakika
+                pool_timeout=60
+            )
+            
+            await progress_msg.delete()
+            
+        except Exception as video_error:
+            print(f"Video send error: {video_error}")
+            # Video gönderilemezse, link olarak gönder
+            await progress_msg.edit_text(
+                f"📹 <b>Video Ready!</b>\n\n"
+                f"<a href='{video_url}'>Click here to download</a>\n\n"
+                f"💡 <i>If the video doesn't download automatically, "
+                f"copy the link and paste it in your browser.</i>",
+                parse_mode='HTML',
+                disable_web_page_preview=False
+            )
         
     except Exception as e:
         error_msg = str(e).lower()
@@ -410,30 +429,51 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Uygulama Yaşam Döngüsü ve Webhook ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global bot_app
+    
+    if not TOKEN:
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+    
+    bot_app = ApplicationBuilder().token(TOKEN).build()
     await bot_app.initialize()
-    webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
-    await bot_app.bot.set_webhook(url=webhook_url)
+    
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
+        await bot_app.bot.set_webhook(url=webhook_url)
+        print(f"📡 Webhook: {webhook_url}")
+    else:
+        print("⚠️ No WEBHOOK_URL provided, running in polling mode")
+    
     await bot_app.start()
     
     print(f"🚀 Instagram Downloader Bot started!")
-    print(f"📡 Webhook: {webhook_url}")
     print(f"💯 Status: FREE & UNLIMITED")
     print(f"🔧 Available APIs: {len(DOWNLOADER_APIS)}")
     
     yield
+    
     await bot_app.stop()
     await bot_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
 
 # Handler'ları ekle
-bot_app.add_handler(CommandHandler("start", start_cmd))
-bot_app.add_handler(CommandHandler("help", start_cmd))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+def setup_handlers():
+    if bot_app:
+        bot_app.add_handler(CommandHandler("start", start_cmd))
+        bot_app.add_handler(CommandHandler("help", start_cmd))
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
+        if not bot_app:
+            return {"status": "error", "message": "Bot not initialized"}
+            
+        # İlk kez çağrılıyorsa handler'ları ekle
+        if not bot_app.handlers:
+            setup_handlers()
+            
         update = Update.de_json(await request.json(), bot_app.bot)
         await bot_app.process_update(update)
         return {"status": "ok"}
@@ -453,6 +493,9 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "timestamp": "2025-06-28"}
+
+# Handler'ları başlangıçta ekle
+setup_handlers()
 
 if __name__ == "__main__":
     import uvicorn
