@@ -1,0 +1,28 @@
+<!-- templates/auth.html -->
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Hesabını Bağla</title>
+    <style>
+        /* Basit stillendirme */
+        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; }
+        form { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        input { display: block; width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px; }
+        button { width: 100%; padding: 0.7rem; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <form method="post">
+        <h2>Instagram Hesabını Bağla</h2>
+        <p>Botu kullanabilmek için lütfen giriş yapın. Bilgileriniz sunucumuzda saklanmayacaktır.</p>
+        <input type="hidden" name="user_id" value="{{ user_id }}">
+        <label for="username">Kullanıcı Adı:</label>
+        <input type="text" id="username" name="username" required>
+        <label for="password">Şifre:</label>
+        <input type="password" id="password" name="password" required>
+        <button type="submit">Bağla</button>
+    </form>
+</body>
+</html>
