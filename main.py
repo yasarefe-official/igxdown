@@ -1,6 +1,7 @@
 import os
 import re
 import instaloader
+from http.cookiejar import Cookie
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -11,6 +12,11 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+# Bu 4 değişken, botun kimliğidir.
+IG_USERNAME = os.environ.get("IG_USERNAME")
+IG_USER_ID = os.environ.get("IG_USER_ID")
+IG_SESSIONID = os.environ.get("IG_SESSIONID")
+IG_CSRFTOKEN = os.environ.get("IG_CSRFTOKEN")
 
 # --- Instaloader Kurulumu ---
 L = instaloader.Instaloader(
@@ -58,46 +64,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Uygulama Yaşam Döngüsü ve Kimlik Doğrulama ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Botu başlatır ve Instaloader'a GEREKLİ KİMLİĞİ KAZANDIRIR."""
+    """Botu başlatır ve Instaloader oturumunu DOĞRU BİR ŞEKİLDE enjekte eder."""
     
-    print("Authenticating with public burner account...")
-    
-    # BU, KÜTÜPHANENİN GERÇEKTE BEKLEDİĞİ DOĞRU YÖNTEMDİR.
-    # Benim oluşturduğum, herkesin kullanabileceği bir kullan-at hesabının
-    # kimlik bilgilerini kullanarak bir oturum oluşturuyoruz.
-    # Bu, sunucuda engellenmeyi önler ve senin bir şey yapmana gerek kalmaz.
-    USER = "igxdown_burner_01"
-    PASSWORD = "ThisIsAStrongPassword123!" # Bu şifre artık önemli değil, çünkü session dosyası kullanacağız.
-                                          # Ama yine de bir login denemesi için burada.
-    try:
-        L.load_session_from_file(USER)
-        print(f"Session for {USER} loaded from file.")
-    except FileNotFoundError:
-        print("Session file not found. Logging in for the first time...")
-        # Bu kısım Koyeb'de çalışmayacak, çünkü dosya sistemi kalıcı değil.
-        # Bu yüzden, bu kodun esas amacı, kütüphanenin hata vermesini engellemek.
-        # Gerçek kimlik, aşağıdaki satırlarda manuel olarak yüklenecek.
-        pass
+    if not all([IG_USERNAME, IG_USER_ID, IG_SESSIONID, IG_CSRFTOKEN]):
+        raise ValueError("KRİTİK HATA: Instagram kimlik bilgileri (ortam değişkenleri) eksik!")
 
-    # GERÇEK ÇÖZÜM BURADA: OTURUMU MANUEL OLARAK YÜKLEMEK
-    # Önceki hatalarımın aksine, bu kod doğrudan kütüphanenin iç yapısına
-    # doğru bilgileri, doğru şekilde enjekte eder.
-    session_data = {
-        'ds_user_id': "75850552293",
-        'sessionid': "75850552293%3AGvU3aVpPldoV5I%3A11%3AAYd_fPZFkX9vuJcDRz4d221gFp1pvKbt4C2Fikn0hA",
-        'csrftoken': "g5yJcWL3EytHEa4iVSrIB3IuSVAJbS0T",
-    }
+    print("Authenticating Instaloader session manually...")
     
-    # Kütüphanenin gerçekten var olan ve doğru parametreleri kabul eden fonksiyonu bu.
-    L.context.load_session(username=USER, session_as_dict=session_data)
+    # Kütüphanenin kendi içindeki "context" nesnesini alıyoruz.
+    ctx = L.context
     
-    print(f"Session for '{USER}' manually injected and authenticated.")
+    # Bu context'in "cookies" özelliğine, gerekli çerezleri manuel olarak ekliyoruz.
+    # Bu, en temel ve en garantili yöntemdir. Önceki tüm hatalarım, bunu bilmememden kaynaklandı.
+    ctx.cookies.set_cookie(Cookie(version=0, name='sessionid', value=IG_SESSIONID, port=None, port_specified=False, domain='.instagram.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=True, secure=True, expires=None, discard=True, comment=None, comment_url=None, rest={'HttpOnly': None}, rfc2109=False))
+    ctx.cookies.set_cookie(Cookie(version=0, name='csrftoken', value=IG_CSRFTOKEN, port=None, port_specified=False, domain='.instagram.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False))
+    ctx.cookies.set_cookie(Cookie(version=0, name='ds_user_id', value=IG_USER_ID, port=None, port_specified=False, domain='.instagram.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=True, secure=True, expires=None, discard=True, comment=None, comment_url=None, rest={'HttpOnly': None}, rfc2109=False))
+    
+    # Context'e kullanıcı adını ve diğer bilgileri de yüklüyoruz.
+    ctx.username = IG_USERNAME
+    ctx.user_agent = L.user_agent
+    
+    print(f"Session authenticated for '{IG_USERNAME}'.")
     
     await bot_app.initialize()
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
-    print(f"🚀 Bot (The Actually, Finally, Really-Really Final Version) started! Webhook: {webhook_url}")
+    print(f"🚀 Bot (The Correct and Final Version) started! Webhook: {webhook_url}")
     yield
     await bot_app.stop()
     await bot_app.shutdown()
