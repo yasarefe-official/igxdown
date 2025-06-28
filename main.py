@@ -42,20 +42,17 @@ def link_handler(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     video_url = update.message.text
     
-    # URL'nin geçerli bir Instagram linki olup olmadığını basitçe kontrol et
     if "instagram.com/" not in video_url:
         update.message.reply_text("Lütfen geçerli bir Instagram video linki gönderin.")
         return
 
-    # Kullanıcıyı web sayfasına yönlendir
     auth_page_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/auth?user_id={user_id}&video_url={video_url}"
     message = (
         "Harika! Bu videoyu indirmek için aşağıdaki linke tıklayıp Instagram bilgilerinizle giriş yapın:\n\n"
-        f"{auth_page_url}\n\n"
+        f"<a href='{auth_page_url}'><b>BU LİNKE TIKLA</b></a>\n\n"
         "Giriş bilgileriniz sadece bu indirme için kullanılacak ve asla kaydedilmeyecektir."
     )
-    update.message.reply_html(message)
-
+    update.message.reply_html(message, disable_web_page_preview=True)
 
 # --- FastAPI ROUTE'LARI (WEB ARAYÜZÜ) ---
 @app.post(f'/{TELEGRAM_TOKEN}')
@@ -76,7 +73,6 @@ async def handle_download(
     password: str = Form(...),
     video_url: str = Form(...)
 ):
-    # Kullanıcıya Telegram'dan işlem başladığına dair bir mesaj gönderelim
     bot.send_message(chat_id=user_id, text="Giriş yapılıyor ve video indiriliyor... Bu işlem biraz sürebilir. ⏳")
     
     L = instaloader.Instaloader(
@@ -116,19 +112,20 @@ async def handle_download(
         bot.send_message(chat_id=user_id, text=f"İndirme işlemi başarısız oldu. 😞\n\n<b>Hata:</b> {e}", parse_mode="HTML")
         return HTMLResponse(content=f"<h1>Hata!</h1><p>İşlem başarısız oldu: {e}</p>", status_code=500)
     finally:
-        # Sunucudaki geçici dosyaları temizle
         if 'target_dir' in locals() and os.path.exists(target_dir):
             for f in os.listdir(target_dir):
                 os.remove(os.path.join(target_dir, f))
             os.rmdir(target_dir)
             logger.info(f"Geçici klasör {target_dir} temizlendi.")
 
-
 # --- UYGULAMA BAŞLANGIÇ NOKTASI ---
 @app.on_event("startup")
-async def on_startup():
+def on_startup():  # Bu fonksiyonu async olmaktan çıkardık
     webhook_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
-    await bot.set_webhook(url=webhook_url)
+    # 'await' kelimesini buradan kaldırdık.
+    bot.set_webhook(url=webhook_url)
+    
     dispatcher.add_handler(CommandHandler('start', start_command))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, link_handler))
-    logger.info(f"Uygulama başlatıldı. Webhook: {webhook_url}")
+    
+    logger.info(f"Uygulama başlatıldı. Webhook ayarlandı: {webhook_url}")
