@@ -1,53 +1,93 @@
-# app.py
 import os
 import logging
 from threading import Thread
 from io import BytesIO
+from uuid import uuid4
 
-from flask import Flask, request, render_template, redirect, url_for
+# --- Web Framework ve Sunucu ---
+from fastapi import FastAPI, Request, Form, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+# --- Telegram Bot Kütüphanesi ---
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
-import instaloader
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
+
+# --- Veritabanı (SQLAlchemy) ---
 from sqlalchemy import create_engine, Column, Integer, String, Text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
 
-# --- Genel Ayarlar ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# --- Instagram İndirici ---
+import instaloader
+
+# --- TEMEL AYARLAR ---
+# Logging ayarlarını en başa alarak her şeyi görebilmemizi sağlıyoruz.
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# --- Ortam Değişkenleri ---
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL") # Koyeb'den aldığımız PostgreSQL URI'si
+# --- ORTAM DEĞİŞKENLERİNİ OKUMA ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 KOYEB_PUBLIC_URL = os.getenv("KOYEB_PUBLIC_URL")
-SECRET_KEY = os.getenv("SECRET_KEY", "default-super-secret-key") # Flask için gizli anahtar
+SECRET_KEY = os.getenv("SECRET_KEY", "bir-varsayilan-gizli-anahtar-ekleyin")
 
-# --- Flask Uygulaması ---
-app = Flask(__name__)
-app.config['SECRET_KEY'] = SECRET_KEY
+# --- ORTAM DEĞİŞKENLERİ TEŞHİSİ ---
+# Uygulama başlamadan önce kritik değişkenlerin durumunu kontrol edelim.
+logger.info("--- ORTAM DEĞİŞKENLERİ KONTROL EDİLİYOR ---")
+logger.info(f"TELEGRAM_TOKEN ayarlı mı? -> {bool(TELEGRAM_TOKEN)}")
+logger.info(f"KOYEB_PUBLIC_URL ayarlı mı? -> {bool(KOYEB_PUBLIC_URL)}")
+if DATABASE_URL:
+    logger.info("DATABASE_URL ayarlı. Başlangıcı: %s...", DATABASE_URL[:30])
+else:
+    # Eğer bu logu görüyorsanız, Koyeb'de DATABASE_URL değişkeni ya yok ya da boş.
+    logger.error("!!! KRİTİK HATA: DATABASE_URL ORTAM DEĞİŞKENİ BULUNAMADI !!!")
+logger.info("--- KONTROL TAMAMLANDI ---")
 
-# --- Veritabanı Ayarları (SQLAlchemy) ---
+if not all([TELEGRAM_TOKEN, DATABASE_URL, KOYEB_PUBLIC_URL]):
+    logger.critical("Gerekli ortam değişkenleri eksik. Uygulama başlatılamıyor.")
+    exit()
+
+# --- VERİTABANI KURULUMU (SQLAlchemy) ---
 Base = declarative_base()
 
 class UserSession(Base):
     __tablename__ = 'user_sessions'
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, unique=True, nullable=False)
+    telegram_id = Column(String, unique=True, nullable=False) # String olarak saklamak daha güvenli
     insta_username = Column(String(100), nullable=False)
     session_data = Column(Text, nullable=False)
 
-engine = create_engine(DATABASE_URL)
-Base.metadata.create_all(engine) # Tabloyu oluştur
-Session = sessionmaker(bind=engine)
-db_session = Session()
+try:
+    engine = create_engine(DATABASE_URL)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    logger.info("Veritabanı bağlantısı ve tablo kontrolü başarılı.")
+except Exception as e:
+    logger.critical(f"Veritabanı bağlantısı kurulamadı: {e}", exc_info=True)
+    exit()
 
-# --- Telegram Bot Ayarları ---
-bot = Bot(TOKEN)
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- FastAPI UYGULAMASI VE TEMPLATE KURULUMU ---
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
+
+# --- TELEGRAM BOTU KURULUMU ---
+bot = Bot(token=TELEGRAM_TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0)
 
-# --- Instaloader Fonksiyonları ---
-def get_instaloader_for_user(telegram_id):
-    user_record = db_session.query(UserSession).filter_by(telegram_id=telegram_id).first()
+# --- INSTALOADER YARDIMCI FONKSİYONU ---
+def get_instaloader_for_user(db_session: Session, telegram_id: str):
+    user_record = db_session.query(UserSession).filter_by(telegram_id=str(telegram_id)).first()
     if not user_record:
         return None, None
 
@@ -57,7 +97,6 @@ def get_instaloader_for_user(telegram_id):
         save_metadata=False, compress_json=False
     )
     
-    # Session verisini dosyaya yazmak yerine direkt olarak yükle
     try:
         session_file = BytesIO(user_record.session_data.encode('utf-8'))
         session_file.name = user_record.insta_username
@@ -65,101 +104,128 @@ def get_instaloader_for_user(telegram_id):
         logger.info(f"{user_record.insta_username} için oturum başarıyla yüklendi.")
         return L, user_record.insta_username
     except Exception as e:
-        logger.error(f"Oturum yüklenemedi: {e}")
+        logger.error(f"Kullanıcı {telegram_id} için oturum yüklenemedi: {e}")
         return None, None
 
-# --- Telegram Handler Fonksiyonları ---
-def start(update: Update, context):
+# --- TELEGRAM HANDLER'LARI ---
+def start_command(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    user_record = db_session.query(UserSession).filter_by(telegram_id=user_id).first()
+    auth_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/auth?user_id={user_id}"
+    message = (
+        "Merhaba! 👋\n"
+        "Instagram videolarını indirebilmek için hesabını güvenli bir şekilde bağlaman gerekiyor.\n\n"
+        f"Lütfen şu linke tıkla ve giriş yap: {auth_url}\n\n"
+        "Not: Güvenliğiniz için bu botla kullanmak üzere yeni bir Instagram hesabı açmanızı öneririz."
+    )
+    update.message.reply_html(message)
 
-    if user_record:
-        update.message.reply_text(f"Merhaba! Instagram hesabın ({user_record.insta_username}) zaten bağlı. Bana bir video linki gönderebilirsin.")
-    else:
-        auth_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}{url_for('auth_page', user_id=user_id)}"
-        update.message.reply_text(
-            "Merhaba! Videoları indirebilmek için Instagram hesabını bağlaman gerekiyor.\n"
-            f"Lütfen şu linke tıkla: {auth_url}"
-        )
-
-def download_video(update: Update, context):
+def download_video_handler(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    L, username = get_instaloader_for_user(user_id)
+    db = SessionLocal()
+    L, username = get_instaloader_for_user(db, str(user_id))
+    db.close()
 
     if not L:
         update.message.reply_text("Lütfen önce /start komutu ile hesabınızı bağlayın.")
         return
 
-    # ... (Buraya önceki kodumuzdaki video indirme mantığı gelecek) ...
-    # ... `download_video` fonksiyonunun içeriğini buraya kopyalayın ...
-    # ... Ve her yerde `L` nesnesini bu fonksiyondan gelen `L` ile kullanın ...
-    update.message.reply_text("Video indirme özelliği şu an yapım aşamasında!")
+    url = update.message.text
+    msg = update.message.reply_text("Video indiriliyor, lütfen bekleyin... ⏳")
 
+    try:
+        shortcode = url.split("/")[-2]
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
 
-# --- Flask Route'ları (Web Arayüzü) ---
-@app.route('/auth', methods=['GET', 'POST'])
-def auth_page():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return "Geçersiz istek: kullanıcı ID'si bulunamadı.", 400
+        # İndirme için geçici ve benzersiz bir klasör
+        target_dir = f"temp_{uuid4()}"
+        L.download_post(post, target=target_dir)
 
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        video_path = None
+        for filename in os.listdir(target_dir):
+            if filename.endswith('.mp4'):
+                video_path = os.path.join(target_dir, filename)
+                break
         
-        L = instaloader.Instaloader()
-        try:
-            L.login(username, password)
+        if video_path:
+            with open(video_path, 'rb') as video_file:
+                context.bot.send_video(chat_id=user_id, video=video_file, caption=f"İndiren: @{username}", supports_streaming=True)
+            msg.edit_text("İşte videon! ✅")
+        else:
+            msg.edit_text("Bir hata oluştu, video dosyası bulunamadı. 😕")
             
-            # Oturumu bir dosyaya kaydet ve içeriğini oku
-            session_filename = f"{username}"
-            L.save_session_to_file(session_filename)
-            
-            with open(session_filename, 'r') as f:
-                session_content = f.read()
-            os.remove(session_filename) # Güvenlik için dosyayı sil
-            
-            # Veritabanına kaydet/güncelle
-            user_record = db_session.query(UserSession).filter_by(telegram_id=user_id).first()
-            if user_record:
-                user_record.insta_username = username
-                user_record.session_data = session_content
-            else:
-                new_session = UserSession(telegram_id=user_id, insta_username=username, session_data=session_content)
-                db_session.add(new_session)
-            
-            db_session.commit()
-            
-            bot.send_message(chat_id=user_id, text=f"✅ Harika! '{username}' adlı Instagram hesabın başarıyla bağlandı.")
-            return "Başarılı! Hesabınız bağlandı. Telegram'a dönebilirsiniz."
+    except Exception as e:
+        logger.error(f"Video indirme hatası: {e}", exc_info=True)
+        msg.edit_text(f"Üzgünüm, bir hata oluştu. Linkin doğru olduğundan emin misin?\nHata: {str(e)}")
+    finally:
+        # Temizlik
+        if 'target_dir' in locals() and os.path.exists(target_dir):
+            for f in os.listdir(target_dir):
+                os.remove(os.path.join(target_dir, f))
+            os.rmdir(target_dir)
 
-        except Exception as e:
-            logger.error(f"Giriş hatası: {e}")
-            return f"Giriş yapılamadı. Lütfen bilgileri kontrol edip tekrar deneyin. Hata: {e}", 401
-
-    # `templates/auth.html` adında bir dosya oluşturmanız gerekecek.
-    return render_template('auth.html', user_id=user_id)
-
-
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
+# --- FastAPI ROUTE'LARI (WEB ARAYÜZÜ) ---
+@app.post(f'/{TELEGRAM_TOKEN}')
+async def process_telegram_update(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, bot)
     dispatcher.process_update(update)
-    return 'ok'
+    return {"status": "ok"}
+
+@app.get("/auth", response_class=HTMLResponse)
+async def auth_page(request: Request, user_id: str):
+    return templates.TemplateResponse("auth.html", {"request": request, "user_id": user_id})
+
+@app.post("/login")
+async def handle_login(
+    user_id: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    L = instaloader.Instaloader()
+    try:
+        L.login(username, password)
+        
+        session_filename = f"{username}"
+        L.save_session_to_file(session_filename)
+        
+        with open(session_filename, 'r') as f:
+            session_content = f.read()
+        os.remove(session_filename)
+
+        user_record = db.query(UserSession).filter_by(telegram_id=str(user_id)).first()
+        if user_record:
+            user_record.insta_username = username
+            user_record.session_data = session_content
+        else:
+            new_session = UserSession(telegram_id=str(user_id), insta_username=username, session_data=session_content)
+            db.add(new_session)
+        
+        db.commit()
+
+        bot.send_message(chat_id=user_id, text=f"✅ Harika! '{username}' adlı Instagram hesabın başarıyla bağlandı.")
+        return HTMLResponse(content="<h1>Başarılı!</h1><p>Hesabınız bağlandı. Artık Telegram'a dönebilirsiniz.</p>", status_code=200)
+
+    except Exception as e:
+        logger.error(f"Instagram giriş hatası ({username}): {e}")
+        error_message = "<h1>Giriş Başarısız!</h1><p>Kullanıcı adı veya şifre yanlış. Lütfen bilgileri kontrol edip tekrar deneyin.</p>"
+        return HTMLResponse(content=error_message, status_code=401)
 
 
-# --- Ana Çalıştırma Bloğu ---
-if __name__ == "__main__":
-    # Bot ve webhook kurulumu
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, download_video))
-    
-    webhook_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/{TOKEN}"
-    if bot.get_webhook_info().url != webhook_url:
-        bot.set_webhook(url=webhook_url)
+# --- UYGULAMA BAŞLANGIÇ NOKTASI ---
+@app.on_event("startup")
+async def on_startup():
+    # Telegram webhook'unu ayarla
+    webhook_url = f"{KOYEB_PUBLIC_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
+    current_webhook = await bot.get_webhook_info()
+    if current_webhook.url != webhook_url:
+        await bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook ayarlandı: {webhook_url}")
+    else:
+        logger.info("Webhook zaten doğru şekilde ayarlanmış.")
 
-    logger.info("Bot ve Webhook ayarlandı.")
-    
-    # Flask uygulamasını production için Gunicorn'dan çalıştırın
-    # Bu blok sadece lokal test için. Koyeb `gunicorn` kullanacak.
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # Telegram handler'larını dispatcher'a ekle
+    dispatcher.add_handler(CommandHandler('start', start_command))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, download_video_handler))
+    logger.info("Telegram handler'ları eklendi.")
+    logger.info("Uygulama başarıyla başlatıldı ve istekleri dinlemeye hazır.")
