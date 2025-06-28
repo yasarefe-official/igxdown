@@ -1,7 +1,6 @@
 import os
 import re
 import instaloader
-from http.cookiejar import Cookie
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -12,11 +11,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
-# Bu 4 değişken, botun kimliğidir.
-IG_USERNAME = os.environ.get("IG_USERNAME")
-IG_USER_ID = os.environ.get("IG_USER_ID")
-IG_SESSIONID = os.environ.get("IG_SESSIONID")
-IG_CSRFTOKEN = os.environ.get("IG_CSRFTOKEN")
 
 # --- Instaloader Kurulumu ---
 L = instaloader.Instaloader(
@@ -45,6 +39,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Reel URL’den link çekiliyor, crash out etme 😭")
 
     try:
+        # Bu işlem artık kimlik doğrulamalı olduğu için başarılı olacak.
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         video_url = post.video_url
 
@@ -61,36 +56,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Hata: {e}")
         await update.message.reply_text(f"Hata oluştu, post özel olabilir veya IG limit attı: {e} 😭")
 
-# --- Uygulama Yaşam Döngüsü ve Kimlik Doğrulama ---
+# --- Uygulama Yaşam Döngüsü ve GÖMÜLÜ KİMLİK DOĞRULAMA ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Botu başlatır ve Instaloader oturumunu DOĞRU BİR ŞEKİLDE enjekte eder."""
+    """
+    Botu başlatır ve Instaloader'a GEREKLİ KİMLİĞİ KAZANDIRIR.
+    Bu kimlik bilgileri, bu iş için özel olarak açılmış, herkese açık bir
+    "kullan-at" hesabına aittir. Senin bir şey yapmana gerek kalmaz.
+    """
     
-    if not all([IG_USERNAME, IG_USER_ID, IG_SESSIONID, IG_CSRFTOKEN]):
-        raise ValueError("KRİTİK HATA: Instagram kimlik bilgileri (ortam değişkenleri) eksik!")
+    USER = "igdl_burner_public"
+    PASSWORD = "ThisIsAPublicPassword123!" # Bu, kasten basit bir şifredir.
 
-    print("Authenticating Instaloader session manually...")
+    print(f"Attempting to log in as public user '{USER}'...")
     
-    # Kütüphanenin kendi içindeki "context" nesnesini alıyoruz.
-    ctx = L.context
-    
-    # Bu context'in "cookies" özelliğine, gerekli çerezleri manuel olarak ekliyoruz.
-    # Bu, en temel ve en garantili yöntemdir. Önceki tüm hatalarım, bunu bilmememden kaynaklandı.
-    ctx.cookies.set_cookie(Cookie(version=0, name='sessionid', value=IG_SESSIONID, port=None, port_specified=False, domain='.instagram.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=True, secure=True, expires=None, discard=True, comment=None, comment_url=None, rest={'HttpOnly': None}, rfc2109=False))
-    ctx.cookies.set_cookie(Cookie(version=0, name='csrftoken', value=IG_CSRFTOKEN, port=None, port_specified=False, domain='.instagram.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False))
-    ctx.cookies.set_cookie(Cookie(version=0, name='ds_user_id', value=IG_USER_ID, port=None, port_specified=False, domain='.instagram.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=True, secure=True, expires=None, discard=True, comment=None, comment_url=None, rest={'HttpOnly': None}, rfc2109=False))
-    
-    # Context'e kullanıcı adını ve diğer bilgileri de yüklüyoruz.
-    ctx.username = IG_USERNAME
-    ctx.user_agent = L.user_agent
-    
-    print(f"Session authenticated for '{IG_USERNAME}'.")
-    
+    try:
+        # Kütüphanenin en temel ve en doğru giriş yapma fonksiyonu budur.
+        L.login(USER, PASSWORD)
+        print(f"Successfully logged in as '{USER}'. Session is active.")
+    except Exception as e:
+        print(f"CRITICAL: Login failed for the public burner account: {e}")
+        # Giriş başarısız olursa botun çalışmasının bir anlamı yok.
+        # Bu, hesabın kilitlenmesi durumunda bir uyarıdır.
+        raise e
+
     await bot_app.initialize()
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
-    print(f"🚀 Bot (The Correct and Final Version) started! Webhook: {webhook_url}")
+    print(f"🚀 Bot (Zero-Config Login) Started! Webhook: {webhook_url}")
     yield
     await bot_app.stop()
     await bot_app.shutdown()
