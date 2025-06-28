@@ -4,7 +4,7 @@ import aiohttp
 import random
 import json
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, Request
 from telegram import Update
@@ -14,51 +14,63 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", "8080"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")  # Opsiyonel RapidAPI anahtarı
 
-# --- ÇALIŞAN API'LER LİSTESİ (2025 Güncel) ---
+# --- ÜCRETSIZ VE SINIR­SIZ API'LER LİSTESİ ---
 DOWNLOADER_APIS = [
     {
-        "name": "InstagramAPI_Direct",
-        "url": "https://www.instagram.com/api/v1/media/{}/info/",
-        "method": "GET",
+        "name": "FastDL",
+        "url": "https://fastdl.app/c/",
+        "method": "POST",
         "headers": {
-            'User-Agent': 'Instagram 219.0.0.12.117 Android',
-            'Accept': '*/*',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://fastdl.app/en'
         },
-        "type": "direct"
+        "enabled": True
     },
     {
-        "name": "RapidAPI_InstagramDownloader",
-        "url": "https://instagram-api-media-downloader.p.rapidapi.com/media-info",
-        "method": "GET",
-        "headers": {
-            'X-RapidAPI-Host': 'instagram-api-media-downloader.p.rapidapi.com',
-            'X-RapidAPI-Key': RAPIDAPI_KEY
-        },
-        "type": "rapidapi",
-        "enabled": bool(RAPIDAPI_KEY)
-    },
-    {
-        "name": "SaveInsta_Alternative",
-        "url": "https://api.saveinsta.app/",
+        "name": "Snapins",
+        "url": "https://snapins.ai/wp-json/aio-dl/video-data/",
         "method": "POST",
         "headers": {
             'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://snapins.ai'
         },
-        "type": "alternative"
+        "enabled": True
     },
     {
-        "name": "InstagramDP_API",
-        "url": "https://instagram-dp1.p.rapidapi.com/getdata",
-        "method": "GET",
+        "name": "InDown",
+        "url": "https://indown.io/action",
+        "method": "POST",
         "headers": {
-            'X-RapidAPI-Host': 'instagram-dp1.p.rapidapi.com',
-            'X-RapidAPI-Key': RAPIDAPI_KEY
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'X-Requested-With': 'XMLHttpRequest'
         },
-        "type": "rapidapi",
-        "enabled": bool(RAPIDAPI_KEY)
+        "enabled": True
+    },
+    {
+        "name": "Inflact",
+        "url": "https://inflact.com/save-instagram/",
+        "method": "POST",
+        "headers": {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        "enabled": True
+    },
+    {
+        "name": "SaveFrom_Net",
+        "url": "https://worker.sf-tools.com/save-from-net",
+        "method": "POST",
+        "headers": {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        "enabled": True
     }
 ]
 
@@ -67,112 +79,179 @@ bot_app = ApplicationBuilder().token(TOKEN).build()
 app = FastAPI()
 
 def extract_instagram_id(url: str):
-    """Instagram URL'sinden post ID'sini çıkarır"""
+    """Instagram URL'sinden post ID'sini çıkarır - düzeltilmiş regex"""
     patterns = [
-        r'/p/([A-Za-z0-9_-]+)/',
-        r'/reel/([A-Za-z0-9_-]+)/',
-        r'/tv/([A-Za-z0-9_-]+)/',
-        r'instagram.com/([^/]+/)?p/([A-Za-z0-9_-]+)',
-        r'instagram.com/([^/]+/)?reel/([A-Za-z0-9_-]+)',
+        r'/p/([A-Za-z0-9_-]+)',
+        r'/reel/([A-Za-z0-9_-]+)',
+        r'/tv/([A-Za-z0-9_-]+)',
+        r'instagram\.com/p/([A-Za-z0-9_-]+)',
+        r'instagram\.com/reel/([A-Za-z0-9_-]+)',
+        r'instagram\.com/tv/([A-Za-z0-9_-]+)'
     ]
     
     for pattern in patterns:
         match = re.search(pattern, url)
         if match:
-            return match.group(-1)  # Son grubu döndür
+            return match.group(1)
     
     return None
 
-def shortcode_to_media_id(shortcode: str):
-    """Instagram shortcode'unu media ID'ye çevirir"""
-    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-    media_id = 0
+def extract_video_urls_from_html(html_content: str):
+    """HTML içerikten video URL'lerini çıkarır"""
+    video_patterns = [
+        r'"(https?://[^"]*\.mp4[^"]*)"',
+        r"'(https?://[^']*\.mp4[^']*)'",
+        r'href="(https?://[^"]*\.mp4[^"]*)"',
+        r'src="(https?://[^"]*\.mp4[^"]*)"',
+        r'data-src="(https?://[^"]*\.mp4[^"]*)"',
+        r'url:"(https?://[^"]*\.mp4[^"]*)"',
+        r'video_url["\']?\s*:\s*["\']([^"\']+)["\']',
+        r'download["\']?\s*:\s*["\']([^"\']*\.mp4[^"\']*)["\']'
+    ]
     
-    for char in shortcode:
-        media_id = media_id * 64 + alphabet.index(char)
+    found_urls = []
     
-    return str(media_id)
+    for pattern in video_patterns:
+        matches = re.findall(pattern, html_content, re.IGNORECASE)
+        for match in matches:
+            clean_url = match.replace('\\/', '/').replace('&amp;', '&')
+            if clean_url.startswith('http') and '.mp4' in clean_url:
+                found_urls.append(clean_url)
+    
+    # En uzun URL'yi döndür (genellikle daha kaliteli)
+    return max(found_urls, key=len) if found_urls else None
 
-async def get_video_from_rapidapi(api_config: dict, url: str):
-    """RapidAPI servislerinden video indirme"""
-    if not api_config.get("enabled", True):
-        return None
+async def try_fastdl_api(url: str):
+    """FastDL API'sini dener"""
+    timeout_config = aiohttp.ClientTimeout(total=20)
+    
+    try:
+        payload = {
+            'url': url,
+            'lang': 'en'
+        }
         
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            async with session.post(
+                DOWNLOADER_APIS[0]['url'],
+                data=payload,
+                headers=DOWNLOADER_APIS[0]['headers']
+            ) as response:
+                
+                if response.status == 200:
+                    html_content = await response.text()
+                    video_url = extract_video_urls_from_html(html_content)
+                    if video_url:
+                        return video_url
+                        
+    except Exception as e:
+        print(f"FastDL API error: {e}")
+        
+    return None
+
+async def try_snapins_api(url: str):
+    """Snapins API'sini dener"""
     timeout_config = aiohttp.ClientTimeout(total=15)
     
     try:
-        params = {"url": url}
+        payload = {
+            "url": url,
+            "token": ""
+        }
         
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
-            async with session.get(
-                api_config['url'],
-                params=params,
-                headers=api_config['headers']
+            async with session.post(
+                DOWNLOADER_APIS[1]['url'],
+                json=payload,
+                headers=DOWNLOADER_APIS[1]['headers']
             ) as response:
                 
                 if response.status == 200:
                     data = await response.json()
                     
-                    # Farklı RapidAPI yanıt formatlarını kontrol et
-                    video_url = None
+                    # Snapins yanıt yapısını kontrol et
                     if isinstance(data, dict):
-                        video_url = (data.get('video_url') or 
-                                   data.get('download_url') or 
-                                   data.get('media_url') or
-                                   data.get('url'))
+                        video_url = (data.get('url') or 
+                                   data.get('video_url') or 
+                                   data.get('download_url'))
                         
-                        # Nested data kontrolü
-                        if not video_url and 'data' in data:
-                            video_url = data['data'].get('video_url')
-                    
-                    return video_url
-                    
+                        if video_url:
+                            return video_url
+                        
+                        # Medya listesi kontrolü
+                        if 'medias' in data and data['medias']:
+                            for media in data['medias']:
+                                if media.get('url') and '.mp4' in media.get('url', ''):
+                                    return media['url']
+                        
     except Exception as e:
-        print(f"RapidAPI error for {api_config['name']}: {e}")
+        print(f"Snapins API error: {e}")
         
     return None
 
-async def get_video_from_alternative(api_config: dict, url: str):
-    """Alternatif API'lerden video indirme"""
-    timeout_config = aiohttp.ClientTimeout(total=20)
+async def try_indown_api(url: str):
+    """InDown API'sini dener"""
+    timeout_config = aiohttp.ClientTimeout(total=15)
     
     try:
-        payload = {"url": url}
+        payload = {
+            'url': url,
+            'submit': 'Download'
+        }
         
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
             async with session.post(
-                api_config['url'],
-                json=payload,
-                headers=api_config['headers']
+                DOWNLOADER_APIS[2]['url'],
+                data=payload,
+                headers=DOWNLOADER_APIS[2]['headers']
             ) as response:
                 
                 if response.status == 200:
-                    try:
-                        data = await response.json()
+                    html_content = await response.text()
+                    video_url = extract_video_urls_from_html(html_content)
+                    if video_url:
+                        return video_url
                         
-                        # Çeşitli yanıt formatlarını kontrol et
-                        if isinstance(data, dict):
-                            video_url = (data.get('video') or 
-                                       data.get('download_url') or 
-                                       data.get('media_url'))
-                            
-                            if video_url:
-                                return video_url
-                                
-                    except:
-                        # JSON değilse HTML olabilir
-                        html = await response.text()
-                        video_match = re.search(r'href="(https?://[^"]*\.mp4[^"]*)"', html)
-                        if video_match:
-                            return video_match.group(1).replace("&amp;", "&")
-                            
     except Exception as e:
-        print(f"Alternative API error for {api_config['name']}: {e}")
+        print(f"InDown API error: {e}")
+        
+    return None
+
+async def try_savefrom_api(url: str):
+    """SaveFrom API'sini dener"""
+    timeout_config = aiohttp.ClientTimeout(total=15)
+    
+    try:
+        payload = {
+            "sf_url": url,
+            "sf_submit": "",
+            "new": 2
+        }
+        
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            async with session.post(
+                DOWNLOADER_APIS[4]['url'],
+                json=payload,
+                headers=DOWNLOADER_APIS[4]['headers']
+            ) as response:
+                
+                if response.status == 200:
+                    data = await response.json()
+                    
+                    if isinstance(data, list) and data:
+                        for item in data:
+                            if isinstance(item, dict) and item.get('url'):
+                                url_candidate = item['url']
+                                if '.mp4' in url_candidate:
+                                    return url_candidate
+                                    
+    except Exception as e:
+        print(f"SaveFrom API error: {e}")
         
     return None
 
 async def get_video_link(url: str):
-    """Ana video indirme fonksiyonu"""
+    """Ana video indirme fonksiyonu - tüm ücretsiz yöntemleri dener"""
     
     # Instagram ID'sini çıkar
     instagram_id = extract_instagram_id(url)
@@ -181,47 +260,41 @@ async def get_video_link(url: str):
     
     print(f"Extracted Instagram ID: {instagram_id}")
     
-    # API'leri karıştır ve dene
-    available_apis = [api for api in DOWNLOADER_APIS if api.get('enabled', True)]
-    random.shuffle(available_apis)
+    # API denemelerini tanımla
+    api_attempts = [
+        ("FastDL", try_fastdl_api),
+        ("Snapins", try_snapins_api),
+        ("InDown", try_indown_api),
+        ("SaveFrom", try_savefrom_api)
+    ]
     
-    for api in available_apis:
+    # API'leri rastgele sırada dene
+    random.shuffle(api_attempts)
+    
+    for api_name, api_func in api_attempts:
         try:
-            print(f"Trying API: {api['name']}...")
-            
-            video_url = None
-            
-            if api['type'] == 'rapidapi':
-                video_url = await get_video_from_rapidapi(api, url)
-            elif api['type'] == 'alternative':
-                video_url = await get_video_from_alternative(api, url)
-            elif api['type'] == 'direct':
-                # Instagram direct API denemesi
-                media_id = shortcode_to_media_id(instagram_id)
-                direct_url = api['url'].format(media_id)
-                
-                timeout_config = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout_config) as session:
-                    async with session.get(direct_url, headers=api['headers']) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if 'items' in data and data['items']:
-                                item = data['items'][0]
-                                if 'video_versions' in item:
-                                    video_url = item['video_versions'][0]['url']
+            print(f"Trying {api_name} API...")
+            video_url = await api_func(url)
             
             if video_url and await is_valid_video_url(video_url):
-                print(f"Success with {api['name']}!")
+                print(f"Success with {api_name}!")
                 return video_url, None
                 
         except Exception as e:
-            print(f"API '{api['name']}' failed: {str(e)[:100]}...")
+            print(f"{api_name} API failed: {str(e)[:100]}...")
             continue
     
-    return None, "Unable to download video. The post might be private, deleted, or the services are temporarily unavailable."
+    return None, ("Unable to download video. This might happen if:\n"
+                  "• The post is from a private account\n"
+                  "• The post has been deleted\n"
+                  "• The content is a Story (not supported)\n"
+                  "• All services are temporarily busy")
 
 async def is_valid_video_url(url: str):
     """Video URL'sinin geçerli olup olmadığını kontrol eder"""
+    if not url or not url.startswith('http'):
+        return False
+        
     try:
         timeout_config = aiohttp.ClientTimeout(total=8)
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
@@ -230,10 +303,17 @@ async def is_valid_video_url(url: str):
                 content_length = int(response.headers.get('content-length', 0))
                 
                 return (response.status == 200 and 
-                       ('video' in content_type or 'mp4' in content_type) and
-                       content_length > 1000)  # En az 1KB olmalı
+                       ('video' in content_type or 'mp4' in content_type or content_length > 10000))
     except:
-        return False
+        # HEAD request başarısızsa GET ile küçük bir kısım indirmeyi dene
+        try:
+            timeout_config = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                headers = {'Range': 'bytes=0-1023'}  # İlk 1KB
+                async with session.get(url, headers=headers) as response:
+                    return response.status in [200, 206]  # 206 = Partial Content
+        except:
+            return False
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
@@ -244,10 +324,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Reels: instagram.com/reel/xxxxx/\n"
         "• IGTV: instagram.com/tv/xxxxx/\n\n"
         "⚡️ <b>Features:</b>\n"
+        "• 100% Free & Unlimited\n"
         "• High quality downloads\n"
         "• No watermarks\n"
-        "• Fast processing\n"
-        "• Multiple backup APIs\n\n"
+        "• Multiple backup systems\n"
+        "• Fast processing\n\n"
         "🚀 Just paste your Instagram link below!"
     )
     
@@ -283,7 +364,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_video(
             chat_id=update.effective_chat.id,
             video=video_url,
-            caption="✅ <b>Downloaded successfully!</b>\n\n💡 <i>Share this bot with your friends!</i>",
+            caption="✅ <b>Downloaded successfully!</b>\n\n💯 <i>Free & Unlimited!</i>",
             supports_streaming=True,
             parse_mode='HTML',
             read_timeout=180, 
@@ -300,31 +381,29 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "file is too big" in error_msg:
             await progress_msg.edit_text(
                 "❌ <b>File Too Large</b>\n\n"
-                "The video file exceeds Telegram's size limit (50MB).\n"
+                "The video file exceeds Telegram's 50MB limit.\n"
                 "Please try a shorter video.",
                 parse_mode='HTML'
             )
         elif "timeout" in error_msg:
             await progress_msg.edit_text(
                 "⏱ <b>Request Timeout</b>\n\n"
-                "The request took too long. This might happen with very large videos.\n"
-                "Please try again with a shorter video.",
+                "The request took too long. Please try again.",
                 parse_mode='HTML'
             )
         elif "bad request" in error_msg:
             await progress_msg.edit_text(
                 "❌ <b>Invalid Video</b>\n\n"
-                "The video link appears to be invalid or the post might be private.",
+                "The video link appears to be invalid or expired.",
                 parse_mode='HTML'
             )
         else:
             await progress_msg.edit_text(
                 "❌ <b>Processing Error</b>\n\n"
-                "An unexpected error occurred. Please try again later.\n\n"
-                "If the problem persists, the post might be:\n"
-                "• Private account\n"
-                "• Deleted post\n"
-                "• Story (not supported)",
+                "Please try again. If the problem persists:\n"
+                "• Check if the account is private\n"
+                "• Verify the post still exists\n"
+                "• Make sure it's not a Story",
                 parse_mode='HTML'
             )
 
@@ -336,10 +415,10 @@ async def lifespan(app: FastAPI):
     await bot_app.bot.set_webhook(url=webhook_url)
     await bot_app.start()
     
-    api_status = "✅ RapidAPI Enabled" if RAPIDAPI_KEY else "⚠️ RapidAPI Disabled (add RAPIDAPI_KEY)"
     print(f"🚀 Instagram Downloader Bot started!")
     print(f"📡 Webhook: {webhook_url}")
-    print(f"🔑 API Status: {api_status}")
+    print(f"💯 Status: FREE & UNLIMITED")
+    print(f"🔧 Available APIs: {len(DOWNLOADER_APIS)}")
     
     yield
     await bot_app.stop()
@@ -366,9 +445,9 @@ async def webhook(request: Request):
 async def root():
     return {
         "message": "Instagram Downloader Bot is running!",
-        "status": "active",
-        "rapidapi_enabled": bool(RAPIDAPI_KEY),
-        "available_apis": len([api for api in DOWNLOADER_APIS if api.get('enabled', True)])
+        "status": "FREE & UNLIMITED",
+        "available_apis": len(DOWNLOADER_APIS),
+        "supported_formats": ["Posts", "Reels", "IGTV"]
     }
 
 @app.get("/health")
