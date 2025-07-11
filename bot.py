@@ -1,9 +1,7 @@
 import os
 import logging
-import subprocess
-import shutil
+import requests # GitHub API'sine istek göndermek için
 from uuid import uuid4
-import time # Cookie timestamp için
 
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
@@ -12,70 +10,26 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- ORTAM DEĞİŞKENLERİ ---
+# --- ORTAM DEĞİŞKENLERİ (Koyeb'de ayarlanacak) ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SESSION_ID = os.getenv("INSTAGRAM_SESSIONID")
+GITHUB_PAT = os.getenv("GITHUB_PAT") # GitHub Personal Access Token
+GITHUB_OWNER = os.getenv("GITHUB_OWNER") # Örneğin, sizin GitHub kullanıcı adınız
+GITHUB_REPO = os.getenv("GITHUB_REPO") # Örneğin, "instagram-bot"
+# Workflow dosyasının adı veya ID'si. Genellikle dosya adı yeterlidir.
+GITHUB_WORKFLOW_ID = os.getenv("GITHUB_WORKFLOW_ID", "main.yml")
 
-if not TELEGRAM_TOKEN:
-    logger.critical("TELEGRAM_TOKEN ortam değişkeni eksik. Uygulama başlatılamıyor.")
+# Kontroller
+if not all([TELEGRAM_TOKEN, GITHUB_PAT, GITHUB_OWNER, GITHUB_REPO]):
+    missing_vars = [
+        var_name for var_name, var_val in {
+            "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+            "GITHUB_PAT": GITHUB_PAT,
+            "GITHUB_OWNER": GITHUB_OWNER,
+            "GITHUB_REPO": GITHUB_REPO
+        }.items() if not var_val
+    ]
+    logger.critical(f"Eksik ortam değişkenleri: {', '.join(missing_vars)}. Uygulama başlatılamıyor.")
     exit()
-
-# --- YARDIMCI FONKSİYONLAR ---
-def create_cookie_file(session_id_value: str, user_id: str) -> str:
-    """Geçici bir cookie dosyası oluşturur."""
-    if not session_id_value:
-        return None
-
-    cookie_file_path = f"temp_cookie_{user_id}_{uuid4()}.txt"
-
-    # Netscape HTTP Cookie File format
-    # http://www.netscape.com/newsref/std/cookie_spec.html
-    # Domain<TAB>all_domains_flag<TAB>Path<TAB>secure_flag<TAB>expires_timestamp<TAB>name<TAB>value
-
-    # Standart başlıklar
-    header = (
-        "# Netscape HTTP Cookie File\n"
-        "# http://www.netscape.com/newsref/std/cookie_spec.html\n"
-        "# This is a generated file!  Do not edit.\n\n"
-    )
-
-    # Expiration timestamp (örn: 10 yıl sonrası)
-    expiration_timestamp = int(time.time()) + (10 * 365 * 24 * 60 * 60)
-
-    # Cookie satırı (TAB karakterleri ile ayrılmış)
-    # .instagram.com    TRUE    /    TRUE    <timestamp>    sessionid    <value>
-    cookie_line = (
-        f".instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
-    )
-    # Belki i.instagram.com için de eklemek gerekebilir, bazı araçlar bunu da kontrol eder.
-    # cookie_line += (
-    #     f".i.instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
-    # )
-
-    try:
-        with open(cookie_file_path, 'w', encoding='utf-8') as f:
-            f.write(header)
-            f.write(cookie_line)
-        logger.info(f"Cookie dosyası oluşturuldu: {cookie_file_path}")
-        return cookie_file_path
-    except Exception as e:
-        logger.error(f"Cookie dosyası oluşturulurken hata: {e}")
-        return None
-
-def cleanup_files(*paths):
-    """Verilen yollardaki dosya ve klasörleri temizler."""
-    for path in paths:
-        if not path: # None ise atla
-            continue
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-                logger.info(f"Dosya silindi: {path}")
-            elif os.path.isdir(path):
-                shutil.rmtree(path)
-                logger.info(f"Klasör silindi: {path}")
-        except Exception as e:
-            logger.error(f"{path} silinirken hata: {e}")
 
 # --- TELEGRAM HANDLER'LARI ---
 def start_command(update: Update, context: CallbackContext):
@@ -84,124 +38,70 @@ def start_command(update: Update, context: CallbackContext):
         f"Merhaba {user_name}! 👋\n\n"
         "Instagram'dan video veya Reel indirmek için bana linkini göndermen yeterli.\n"
         "Örneğin: <code>https://www.instagram.com/p/Cxyz123.../</code>\n\n"
-        "Botun kullanımıyla ilgili bir sorun yaşarsanız veya video indirilemezse, lütfen videonun herkese açık olduğundan emin olun veya daha sonra tekrar deneyin."
+        "Linkinizi gönderdikten sonra videonuz hazırlanacak ve size gönderilecektir. Bu işlem biraz zaman alabilir."
     )
 
+def trigger_github_action(instagram_url: str, chat_id: str) -> bool:
+    """Belirtilen Instagram URL'si için GitHub Actions workflow'unu tetikler."""
+    api_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
+
+    headers = {
+        "Authorization": f"token {GITHUB_PAT}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+
+    data = {
+        "ref": "main", # Genellikle main branch kullanılır
+        "inputs": {
+            "instagram_url": instagram_url,
+            "chat_id": str(chat_id) # Chat ID'nin string olması önemli olabilir
+        }
+    }
+
+    try:
+        response = requests.post(api_url, headers=headers, json=data, timeout=10) # 10 saniye timeout
+        response.raise_for_status() # HTTP 4xx veya 5xx hatalarında exception fırlatır
+        logger.info(f"GitHub Actions workflow başarıyla tetiklendi. URL: {instagram_url}, Chat ID: {chat_id}. Yanıt Kodu: {response.status_code}")
+        return True
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"GitHub Actions API'sine istekte HTTP hatası: {http_err}")
+        logger.error(f"Yanıt içeriği: {response.text if response else 'Yanıt yok'}")
+    except requests.exceptions.RequestException as req_err:
+        logger.error(f"GitHub Actions API'sine istekte hata: {req_err}")
+    except Exception as e:
+        logger.error(f"GitHub Actions tetiklenirken beklenmedik bir hata: {e}", exc_info=True)
+
+    return False
+
 def link_handler(update: Update, context: CallbackContext):
-    user_id = str(update.effective_user.id) # Dosya adlarında kullanmak için str
+    user_id = str(update.effective_user.id)
     video_url = update.message.text
 
     if "instagram.com/" not in video_url:
         update.message.reply_text("Lütfen geçerli bir Instagram video/reel linki gönderin.")
         return
 
-    context.bot.send_message(chat_id=user_id, text="Video talebin alındı, indirme işlemi başlatılıyor... ⏳")
+    # Kullanıcıya ilk geri bildirimi ver
+    update.message.reply_text("İsteğiniz alındı, video indirme işlemi başlatılıyor... cessing Lütfen bekleyin. ⏳")
 
-    cookie_file = None
-    if SESSION_ID:
-        cookie_file = create_cookie_file(SESSION_ID, user_id)
+    # GitHub Actions'ı tetikle
+    success = trigger_github_action(instagram_url=video_url, chat_id=user_id)
+
+    if success:
+        # Actions'ın tamamlanmasını burada beklemiyoruz.
+        # Actions, videoyu işleyip doğrudan kullanıcıya gönderecek.
+        # İsteğe bağlı olarak burada farklı bir mesaj daha gönderilebilir veya hiç gönderilmeyebilir.
+        # Örneğin: "Videonuz hazırlanıyor ve hazır olduğunda size gönderilecek."
+        # Şimdilik ek bir mesaj göndermeyelim, Actions'tan video gelmesini beklesin kullanıcı.
+        logger.info(f"Kullanıcı {user_id} için {video_url} indirme görevi GitHub Actions'a gönderildi.")
     else:
-        logger.info("INSTAGRAM_SESSIONID ayarlanmamış. Anonim indirme denenecek.")
-
-    # İndirme için geçici bir klasör
-    download_dir = f"temp_dl_{user_id}_{uuid4()}"
-    os.makedirs(download_dir, exist_ok=True)
-
-    # yt-dlp komutu
-    # -S "height:1080" gibi kalite ayarları eklenebilir.
-    # --force-overwrites: Varolan dosyaların üzerine yazar (genellikle temp klasörde gereksiz)
-    # --no-playlist: Eğer link bir playlist'e aitse sadece videoyu indirir
-    # --socket-timeout: Bağlantı zaman aşımı
-    # --retries: Deneme sayısı
-    yt_dlp_command = [
-        'yt-dlp',
-        '--no-warnings', # Uyarıları gizle (stdout'u temiz tutmak için)
-        '--force-overwrites',
-        '--no-playlist',
-        '--socket-timeout', '30', # 30 saniye
-        # '--retries', '3', # Deneme sayısı (isteğe bağlı)
-        '-o', os.path.join(download_dir, '%(id)s.%(ext)s'), # Çıktı şablonu
-        # Video formatı:
-        # 1. En iyi mp4 video + en iyi m4a sesi birleştir.
-        # 2. Olmazsa, en iyi mp4 (sesli veya sessiz) al.
-        # 3. Olmazsa, en iyi video (herhangi bir format) + en iyi sesi (herhangi bir format) birleştir.
-        # 4. Olmazsa, en iyi (sesli veya sessiz, herhangi bir format) al.
-        '-f', 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b',
-    ]
-
-    if cookie_file:
-        yt_dlp_command.extend(['--cookies', cookie_file])
-
-    yt_dlp_command.append(video_url)
-
-    video_path = None
-    try:
-        logger.info(f"yt-dlp komutu çalıştırılıyor: {' '.join(yt_dlp_command)}")
-        # capture_output=True ile stdout ve stderr yakalanır
-        # text=True ile çıktılar string olarak gelir
-        # timeout: subprocess'in toplam çalışma süresi (çok uzun videolar için artırılabilir)
-        process = subprocess.run(yt_dlp_command, capture_output=True, text=True, check=False, timeout=300) # 5 dakika timeout
-
-        if process.returncode == 0:
-            logger.info("yt-dlp başarıyla tamamlandı.")
-            logger.debug(f"yt-dlp stdout:\n{process.stdout}")
-
-            # İndirilen dosyayı bul (genellikle klasörde tek bir video olur)
-            downloaded_files = os.listdir(download_dir)
-            if downloaded_files:
-                # Genellikle mp4 ararız, ancak başka formatlar da olabilir
-                for f_name in downloaded_files:
-                    if f_name.endswith(('.mp4', '.mkv', '.webm')): # Olası video uzantıları
-                        video_path = os.path.join(download_dir, f_name)
-                        break
-                if not video_path and downloaded_files: # Eğer video uzantılı bulunamazsa ilk dosyayı al (riskli)
-                     video_path = os.path.join(download_dir, downloaded_files[0])
-
-                if video_path:
-                    logger.info(f"Video bulundu: {video_path}")
-                    with open(video_path, 'rb') as video_file:
-                        context.bot.send_video(chat_id=user_id, video=video_file, caption="İşte videon! ✅ (yt-dlp ile indirildi)", timeout=120)
-                    update.message.reply_text("Video başarıyla gönderildi!")
-                else:
-                    update.message.reply_text("Video indirildi ancak sunucuda bulunamadı veya formatı tanınmadı.")
-                    logger.error(f"İndirilen video dosyası bulunamadı. Klasör içeriği: {downloaded_files}")
-            else:
-                update.message.reply_text("Video indirilemedi (yt-dlp klasörü boş).")
-                logger.error("yt-dlp bir video indirmedi, klasör boş.")
-                if process.stderr:
-                    logger.error(f"yt-dlp stderr (boş klasör):\n{process.stderr}")
-        else:
-            error_message = f"Video indirilemedi (yt-dlp hata kodu: {process.returncode})."
-            logger.error(error_message)
-            logger.error(f"yt-dlp stdout:\n{process.stdout}")
-            logger.error(f"yt-dlp stderr:\n{process.stderr}")
-
-            # Kullanıcıya daha anlamlı bir hata mesajı göstermeye çalışalım
-            if "Login required" in process.stderr or "login" in process.stderr.lower() or "Private video" in process.stderr:
-                update.message.reply_text("Bu video indirilemedi. Video gizli olabilir veya özel erişim gerektiriyor olabilir. Lütfen videonun herkese açık olduğundan emin olun.")
-            elif "Unsupported URL" in process.stderr:
-                update.message.reply_text("Gönderdiğiniz link desteklenmiyor veya geçersiz görünüyor.")
-            elif "403" in process.stderr or "Forbidden" in process.stderr:
-                 update.message.reply_text("Instagram'a erişimde bir sorun oluştu (Erişim Engellendi). Lütfen daha sonra tekrar deneyin.")
-            elif process.returncode != 0 : # Diğer yt-dlp hataları
-                update.message.reply_text("Video indirilirken bir sorunla karşılaşıldı. Lütfen linki kontrol edin veya daha sonra tekrar deneyin.")
-            else: # Bu durum normalde olmamalı eğer returncode 0 değilse
-                update.message.reply_text(error_message + " Detaylar geliştirici loglarına kaydedildi.")
-
-    except subprocess.TimeoutExpired:
-        logger.error("yt-dlp zaman aşımına uğradı.")
-        update.message.reply_text("Video indirme işlemi çok uzun sürdüğü için zaman aşımına uğradı.")
-    except Exception as e:
-        logger.error(f"Genel indirme hatası (yt-dlp): {e}", exc_info=True)
-        update.message.reply_text(f"Video indirilirken beklenmedik bir hata oluştu: {type(e).__name__}")
-    finally:
-        cleanup_files(cookie_file, download_dir) # video_path'i silmeye gerek yok çünkü download_dir siliniyor
+        update.message.reply_text(" माफ करा, şu anda video indirme işlemini başlatırken bir sorun oluştu. Lütfen daha sonra tekrar deneyin.") # Hintçe özür :)
 
 def error_handler(update: Update, context: CallbackContext):
     logger.error(f"Update '{update}' caused error '{context.error}'", exc_info=context.error)
     if update and update.effective_message:
-        # Kullanıcıya çok fazla teknik detay vermeden genel bir hata mesajı
-        update.effective_message.reply_text("İşlem sırasında bir sorun oluştu. Lütfen tekrar deneyin veya daha sonra gelin.")
+        update.effective_message.reply_text("İşlem sırasında beklenmedik bir sorun oluştu. Lütfen daha sonra tekrar deneyin.")
 
 # --- ANA UYGULAMA FONKSİYONU ---
 def main():
@@ -209,14 +109,19 @@ def main():
     dispatcher = updater.dispatcher
 
     dispatcher.add_handler(CommandHandler('start', start_command))
-    # Regex'i biraz daha genel tutabiliriz, /tv/, /stories/ gibi linkleri de yakalaması için
-    # Ancak şimdilik /p/ ve /reel/ yeterli.
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel)/\S+'), link_handler))
     dispatcher.add_error_handler(error_handler)
 
+    logger.info("Bot başlatıldı ve Koyeb üzerinde çalışıyor (GitHub Actions tetikleyici modunda).")
+
+    # Koyeb gibi platformlar genellikle web sunucusu bekler.
+    # Eğer bu script doğrudan çalıştırılacaksa (worker olarak), start_polling yeterli.
+    # Eğer bir web framework (FastAPI, Flask) ile bir sağlık endpoint'i vb. sunulacaksa,
+    # o zaman updater.start_polling() bir thread'de çalıştırılıp ana thread web sunucusunu yönetebilir.
+    # Şimdilik basit bir worker olduğunu varsayalım:
     updater.start_polling()
-    logger.info("Bot başlatıldı ve polling modunda çalışıyor (yt-dlp kullanılıyor).")
     updater.idle()
+
     logger.info("Bot polling sonlandırıldı, uygulama kapatılıyor.")
 
 if __name__ == '__main__':
