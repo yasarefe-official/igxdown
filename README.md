@@ -6,30 +6,34 @@ Bu proje, Telegram üzerinden gönderilen Instagram video linklerini indirip kul
 
 ## Özellikler
 
--   Instagram Reel ve video gönderilerini indirir.
+-   Instagram Reel ve video gönderilerini `yt-dlp` kullanarak indirir.
 -   Kullanımı kolay Telegram bot arayüzü.
 -   GitHub Actions ile sunucusuz (serverless) çalışma.
--   Belirli zaman aralıklarında otomatik aktif/pasif olma.
--   Herkese açık videolar için anonim indirme.
--   Özel veya giriş gerektiren videolar için opsiyonel `INSTAGRAM_SESSIONID` kullanımı.
+-   Belirlenmiş zaman aralıklarında (örneğin her gün 6 saat) otomatik çalışma.
+-   `ffmpeg` kullanarak video ve ses akışlarını birleştirme (sesli indirme için).
+-   Opsiyonel `INSTAGRAM_SESSIONID` kullanımı (geliştiriciler veya özel durumlar için).
 
 ## Nasıl Çalışır?
 
-Bot, `python-telegram-bot` kütüphanesi kullanılarak oluşturulmuştur ve Instagram içeriklerini indirmek için `instaloader` kütüphanesini kullanır.
+Bu bot, `python-telegram-bot` kütüphanesi ile Telegram API'sine bağlanır. Instagram içeriklerini indirmek için ise popüler ve güçlü bir komut satırı aracı olan `yt-dlp` kullanılır. `yt-dlp`, `bot.py` scripti içerisinden `subprocess` modülü aracılığıyla çalıştırılır.
+
+Eğer indirilen video ve ses ayrı akışlar halindeyse, `yt-dlp` bu akışları birleştirmek için `ffmpeg` aracını kullanır. Bu nedenle, `ffmpeg` de GitHub Actions iş akışında otomatik olarak kurulmaktadır.
 
 ### Zamanlama ve Çalışma Prensibi
 
-Bot, GitHub Actions üzerinde bir cron job ile her saat başı tetiklenir.
--   **Çift saatlerde** (UTC olarak 00:00, 02:00, 04:00, ..., 22:00): Bot başlatılır ve yaklaşık 55-58 dakika boyunca aktif kalır. Bu süre zarfında gönderilen Instagram linklerini işler.
--   **Tek saatlerde** (UTC olarak 01:00, 03:00, 05:00, ..., 23:00): Bot başlatılmaz veya başlatılsa bile aktif olmadığını belirterek hemen kapanır.
+Bot, GitHub Actions üzerinde bir cron job ile **her gün Türkiye saati ile 12:00'de (UTC 09:00)** otomatik olarak çalışmaya başlar ve yaklaşık **6 saat boyunca (Türkiye saati ile 18:00'e kadar, UTC 15:00)** aktif kalır. Bu süre sonunda GitHub Actions iş akışı otomatik olarak sonlanır.
 
-Bu zamanlama, botun GitHub Actions üzerindeki ücretsiz kullanım limitlerini aşmadan çalışmasını sağlar.
+Bu zamanlama, `.github/workflows/main.yml` dosyasındaki `schedule: - cron: '0 9 * * *'` (her gün UTC 09:00'da çalıştır) ve `run-bot` işindeki `timeout-minutes: 358` (yaklaşık 6 saatlik çalışma süresi) ayarları ile yönetilir.
 
 ### Instagram İndirme Mantığı
 
-1.  **Anonim İndirme:** Bot öncelikle videoyu Instagram'a giriş yapmadan (anonim olarak) indirmeye çalışır. Bu, çoğu herkese açık video için yeterlidir.
-2.  **`INSTAGRAM_SESSIONID` ile İndirme (Opsiyonel):**
-    Eğer bir video anonim olarak indirilemiyorsa (örneğin, özel bir hesaba aitse veya Instagram giriş gerektiriyorsa), bot kullanıcıya `INSTAGRAM_SESSIONID` kullanması gerektiğini belirtebilir. Bu `sessionid`, kullanıcının kendi Instagram oturumunu temsil eder ve botun bu oturum üzerinden işlem yapmasını sağlar. **Bu yöntem, kullanıcının şifresini paylaşmasından daha güvenlidir.**
+Bot, bir Instagram linki aldığında aşağıdaki adımları izler:
+1.  Eğer `INSTAGRAM_SESSIONID` ortam değişkeni (GitHub Secrets aracılığıyla) ayarlanmışsa, bu `sessionid` kullanılarak geçici bir cookie dosyası oluşturulur ve `yt-dlp`'ye bu dosya `--cookies` parametresi ile verilir. Bu, özel veya giriş gerektiren bazı videoların indirilmesine yardımcı olabilir.
+2.  `yt-dlp`, verilen URL'yi ve (varsa) cookie dosyasını kullanarak videoyu indirmeye çalışır. Mümkün olan en iyi kalitede MP4 video ve sesi birleştirmeye çalışır.
+3.  İndirme işlemi başarılı olursa, video kullanıcıya Telegram üzerinden gönderilir.
+4.  Tüm geçici dosyalar (cookie dosyası, indirilen video) işlem sonunda otomatik olarak silinir.
+
+Genel kullanıcıların `INSTAGRAM_SESSIONID` ayarlamasına gerek yoktur; bot, ayarlanmamışsa anonim olarak indirme deneyecektir. Ancak, bazı videoların (örneğin özel hesaplara ait olanlar) sadece geçerli bir `sessionid` ile indirilebileceği unutulmamalıdır.
 
 ## Kurulum ve Kullanım
 
@@ -53,17 +57,29 @@ Bu botu kendi Telegram hesabınızla kullanmak için aşağıdaki adımları izl
 
 Bot artık belirlediğiniz zamanlarda otomatik olarak çalışmaya başlayacaktır.
 
-### `INSTAGRAM_SESSIONID` Nasıl Alınır?
+## Geliştiriciler İçin Notlar / İleri Düzey Kullanım
 
-`sessionid`'nizi tarayıcınızın geliştirici araçlarını kullanarak bulabilirsiniz:
+### `INSTAGRAM_SESSIONID` Kullanımı (Opsiyonel)
+
+Bu bot, genel kullanıcılar için `INSTAGRAM_SESSIONID` ayarlanmasını **gerektirmez**. Çoğu herkese açık video, `sessionid` olmadan da indirilebilir.
+
+Ancak, aşağıdaki durumlarda `INSTAGRAM_SESSIONID` kullanmak faydalı veya gerekli olabilir:
+-   **Özel (Private) Hesaplardan Video İndirme:** Eğer takip ettiğiniz özel bir hesaptan video indirmek istiyorsanız.
+-   **Giriş Gerektiren Videolar:** Instagram'ın bazı videolar için giriş yapılmasını zorunlu kıldığı durumlar.
+-   **Rate Limiting / Engelleme Sorunları:** Anonim isteklerin Instagram tarafından sık sık kısıtlandığı veya engellendiği durumlarda, geçerli bir `sessionid` kullanmak bu sorunları aşmaya yardımcı olabilir.
+
+Eğer bu depoyu forklayıp kendi botunuzu çalıştırıyorsanız ve yukarıdaki durumlar için `sessionid` kullanmak isterseniz, `INSTAGRAM_SESSIONID` adlı bir GitHub Secret oluşturarak kendi `sessionid` değerinizi buraya ekleyebilirsiniz. Bot, bu secret ayarlanmışsa otomatik olarak `yt-dlp`'ye cookie dosyası aracılığıyla iletecektir.
+
+**`INSTAGRAM_SESSIONID` Nasıl Alınır?**
 
 1.  Tarayıcınızda Instagram.com'a gidin ve hesabınıza giriş yapın.
 2.  Geliştirici araçlarını açın (genellikle F12 tuşu veya sağ tıklayıp "İncele" seçeneği).
 3.  `Application` (Chrome/Edge) veya `Storage` (Firefox) sekmesine gidin.
 4.  Sol menüden `Cookies` > `https://www.instagram.com` seçeneğini bulun.
-5.  Çerezler listesinde `sessionid` adlı çerezi bulun ve değerini kopyalayın. Bu değeri GitHub secret olarak `INSTAGRAM_SESSIONID` adıyla kaydedin.
+5.  Çerezler listesinde `sessionid` adlı çerezi bulun ve değerini kopyalayın.
+6.  Bu değeri, forklanmış deponuzdaki GitHub Secrets ayarlarına `INSTAGRAM_SESSIONID` adıyla ekleyin.
 
-**Not:** `sessionid`'niz zaman zaman geçersiz olabilir (örneğin, Instagram'dan çıkış yaptığınızda veya uzun bir süre sonra). Eğer bot video indiremezse, `sessionid`'nizi güncellemeyi deneyin.
+**Not:** `sessionid`'niz zaman zaman geçersiz olabilir. Eğer `sessionid` kullanmanıza rağmen indirme sorunları devam ediyorsa, yeni bir `sessionid` alıp secret'ı güncellemeyi deneyin.
 
 ## Dosya Yapısı
 
