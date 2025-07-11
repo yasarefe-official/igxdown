@@ -1,6 +1,2 @@
-fastapi
-uvicorn
 python-telegram-bot==13.7
 instaloader
-python-multipart
-jinja2

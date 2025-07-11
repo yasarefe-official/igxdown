@@ -1,0 +1,56 @@
+name: Telegram Instagram Bot CI
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Her saat başı çalıştır
+  workflow_dispatch: # Manuel tetikleme için
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      INSTAGRAM_SESSIONID: ${{ secrets.INSTAGRAM_SESSIONID }} # Opsiyonel, kullanıcı ayarlayabilir
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.11' # Dockerfile'daki sürümle uyumlu veya projenin gerektirdiği sürüm
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Check current hour and run bot if even
+      # GitHub Actions UTC kullanır. Botun içindeki is_bot_active() fonksiyonu da UTC'ye göre çalışır.
+      # Bu adım, botun kendisi zaten saat kontrolü yaptığı için aslında gereksiz olabilir,
+      # ancak bir ön filtreleme olarak veya botun içindeki kontrol başarısız olursa diye eklenebilir.
+      # Veya doğrudan botu çalıştırıp, botun içindeki mantığa güvenebiliriz.
+      # Şimdilik, botun içindeki mantığa güvenerek doğrudan çalıştıralım.
+      # Bot, aktif değilse zaten hemen çıkacaktır.
+      run: |
+        echo "Mevcut UTC saati: $(date -u +'%H')"
+        # python bot.py # Botun kendisi saat kontrolü yapacak
+
+    - name: Run Telegram Bot
+      # Botun yaklaşık 55-58 dakika çalışıp sonlanması bekleniyor.
+      # timeout-minutes, tüm job adımlarının toplam süresidir.
+      # Eğer botun kendisi düzgün kapanmazsa, bu timeout onu sonlandıracaktır.
+      # Cron her saat başı tetiklendiği için, bir sonraki çalıştırmadan önce bu job'un bitmiş olması gerekir.
+      timeout-minutes: 58
+      run: python bot.py
+
+    - name: Clean up temporary files (if any left)
+      # Botun içindeki finally bloğu temizlik yapmalı, bu ek bir önlem.
+      if: always() # Her zaman çalışsın (başarılı veya başarısız olsa da)
+      run: |
+        echo "Temizlik yapılıyor (varsa kalan temp dosyaları)..."
+        # rm -rf temp_* # Bot scripti kendi temp dosyalarını sildiği için bu genellikle gerekmeyebilir.
+        # Ancak botun beklenmedik şekilde sonlanması durumunda kalıntıları temizlemek için eklenebilir.
+        # Şimdilik botun kendi temizliğine güveniyoruz.
+        echo "Temizlik tamamlandı."
