@@ -2,7 +2,7 @@ name: Telegram Instagram Bot CI
 
 on:
   schedule:
-    - cron: '0 12 * * *' # Her gün UTC 12:00'de çalıştır
+    - cron: '0 9 * * *' # Her gün UTC 09:00'da (TR saati ile 12:00) çalıştır
   workflow_dispatch: # Manuel tetikleme için
 
 jobs:
