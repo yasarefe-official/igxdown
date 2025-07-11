@@ -27,21 +27,35 @@ def create_cookie_file(session_id_value: str, user_id: str) -> str:
         return None
 
     cookie_file_path = f"temp_cookie_{user_id}_{uuid4()}.txt"
-    # Netscape cookie file format:
-    # domain<TAB>flag<TAB>path<TAB>secure<TAB>expiration<TAB>name<TAB>value
-    # .instagram.com	TRUE	/	TRUE	<timestamp>	sessionid	<SESSION_ID_DEĞERİ>
-    # Expiration timestamp (örn: 10 yıl sonrası). yt-dlp genellikle buna çok takılmaz.
-    expiration_timestamp = int(time.time()) + 10 * 365 * 24 * 60 * 60
 
-    cookie_content = (
-        f".instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
-        # Bazı durumlarda ek cookie'ler gerekebilir, şimdilik sadece sessionid
-        # f"i.instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
+    # Netscape HTTP Cookie File format
+    # http://www.netscape.com/newsref/std/cookie_spec.html
+    # Domain<TAB>all_domains_flag<TAB>Path<TAB>secure_flag<TAB>expires_timestamp<TAB>name<TAB>value
+
+    # Standart başlıklar
+    header = (
+        "# Netscape HTTP Cookie File\n"
+        "# http://www.netscape.com/newsref/std/cookie_spec.html\n"
+        "# This is a generated file!  Do not edit.\n\n"
     )
 
+    # Expiration timestamp (örn: 10 yıl sonrası)
+    expiration_timestamp = int(time.time()) + (10 * 365 * 24 * 60 * 60)
+
+    # Cookie satırı (TAB karakterleri ile ayrılmış)
+    # .instagram.com    TRUE    /    TRUE    <timestamp>    sessionid    <value>
+    cookie_line = (
+        f".instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
+    )
+    # Belki i.instagram.com için de eklemek gerekebilir, bazı araçlar bunu da kontrol eder.
+    # cookie_line += (
+    #     f".i.instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
+    # )
+
     try:
-        with open(cookie_file_path, 'w') as f:
-            f.write(cookie_content)
+        with open(cookie_file_path, 'w', encoding='utf-8') as f:
+            f.write(header)
+            f.write(cookie_line)
         logger.info(f"Cookie dosyası oluşturuldu: {cookie_file_path}")
         return cookie_file_path
     except Exception as e:
