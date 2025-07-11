@@ -2,7 +2,7 @@ name: Telegram Instagram Bot CI
 
 on:
   schedule:
-    - cron: '0 * * * *' # Her saat başı çalıştır
+    - cron: '0 12 * * *' # Her gün UTC 12:00'de çalıştır
   workflow_dispatch: # Manuel tetikleme için
 
 jobs:
@@ -26,23 +26,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Check current hour and run bot if even
-      # GitHub Actions UTC kullanır. Botun içindeki is_bot_active() fonksiyonu da UTC'ye göre çalışır.
-      # Bu adım, botun kendisi zaten saat kontrolü yaptığı için aslında gereksiz olabilir,
-      # ancak bir ön filtreleme olarak veya botun içindeki kontrol başarısız olursa diye eklenebilir.
-      # Veya doğrudan botu çalıştırıp, botun içindeki mantığa güvenebiliriz.
-      # Şimdilik, botun içindeki mantığa güvenerek doğrudan çalıştıralım.
-      # Bot, aktif değilse zaten hemen çıkacaktır.
-      run: |
-        echo "Mevcut UTC saati: $(date -u +'%H')"
-        # python bot.py # Botun kendisi saat kontrolü yapacak
-
     - name: Run Telegram Bot
-      # Botun yaklaşık 55-58 dakika çalışıp sonlanması bekleniyor.
       # timeout-minutes, tüm job adımlarının toplam süresidir.
       # Eğer botun kendisi düzgün kapanmazsa, bu timeout onu sonlandıracaktır.
-      # Cron her saat başı tetiklendiği için, bir sonraki çalıştırmadan önce bu job'un bitmiş olması gerekir.
-      timeout-minutes: 58
+      # Cron her gün UTC 12:00'de tetiklenecek ve bu adım yaklaşık 6 saat sonra (UTC 18:00 civarı) zaman aşımına uğrayacak.
+      timeout-minutes: 358 # Yaklaşık 5 saat 58 dakika
       run: python bot.py
 
     - name: Clean up temporary files (if any left)

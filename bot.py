@@ -1,8 +1,5 @@
 import os
 import logging
-import datetime
-import time
-import signal
 from uuid import uuid4
 import shutil
 
@@ -22,19 +19,8 @@ if not TELEGRAM_TOKEN:
     logger.critical("TELEGRAM_TOKEN ortam değişkeni eksik. Uygulama başlatılamıyor.")
     exit()
 
-# --- ZAMAN KONTROLÜ ---
-def is_bot_active():
-    """Botun aktif olması gereken saatleri kontrol eder (çift saatler UTC)."""
-    now_utc = datetime.datetime.now(datetime.timezone.utc)
-    logger.info(f"Mevcut UTC saati: {now_utc.hour}")
-    return now_utc.hour % 2 == 0
-
 # --- TELEGRAM HANDLER'LARI ---
 def start_command(update: Update, context: CallbackContext):
-    if not is_bot_active():
-        update.message.reply_text("Merhaba! Instagram video indirme botu şu anda aktif değil. Lütfen daha sonra tekrar deneyin (çift saatlerde aktif olur).")
-        return
-
     user_name = update.effective_user.first_name
     update.message.reply_html(
         f"Merhaba {user_name}! 👋\n"
@@ -44,11 +30,6 @@ def start_command(update: Update, context: CallbackContext):
     )
 
 def link_handler(update: Update, context: CallbackContext):
-    if not is_bot_active():
-        logger.info(f"Bot aktif değil, {update.effective_user.id} kullanıcısından gelen mesaj işlenmedi.")
-        # İsteğe bağlı olarak kullanıcıya mesaj gönderilebilir, ancak sürekli mesaj göndermemek için burada sessiz kalabiliriz.
-        return
-
     user_id = update.effective_user.id
     video_url = update.message.text
 
@@ -162,25 +143,8 @@ def error_handler(update: Update, context: CallbackContext):
     if update and update.effective_message:
         update.effective_message.reply_text("Bir hata oluştu. Geliştiriciler bilgilendirildi.")
 
-def shutdown(updater):
-    logger.info("Bot kapatılıyor...")
-    updater.stop()
-    updater.is_idle = False # Polling'i durdurmak için
-
-def signal_handler(signum, frame):
-    logger.info(f"Sinyal {signum} alındı, bot kapatılıyor...")
-    # global updater değişkeni tanımlanmadığı için bu yöntem doğrudan çalışmayabilir.
-    # Ana döngüde updater'ı global yapabilir veya main fonksiyonuna parametre olarak geçebiliriz.
-    # Şimdilik, ana döngüde timeout ile kapatma yapacağız.
-    raise SystemExit("Sinyal ile çıkış isteniyor.")
-
-
 # --- ANA UYGULAMA FONKSİYONU ---
 def main():
-    if not is_bot_active():
-        logger.info("Bot şu anda aktif değil (çalışma saatleri dışında). Kapatılıyor.")
-        return
-
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dispatcher = updater.dispatcher
 
@@ -192,28 +156,21 @@ def main():
     updater.start_polling()
     logger.info("Bot başlatıldı ve polling modunda çalışıyor.")
 
-    # GitHub Actions'da yaklaşık 1 saat çalışıp sonra kapanması için:
-    # GitHub Actions'ın kendi timeout'unu (örneğin 58 dakika) kullanmak daha güvenilir olacaktır.
-    # Ancak, botun kendi içinde de bir süre sınırı olması iyi bir pratiktir.
-    # Bu süre, GitHub Actions cron job'ının bir sonraki çalıştırmasından önce dolmalıdır.
-    # Örneğin, 55 dakika (3300 saniye) sonra botu durdur.
-    start_time = time.time()
-    run_duration_seconds = 55 * 60
+    # Bot, GitHub Actions'ın timeout-minutes ayarı ile yönetileceği için
+    # burada ek bir zamanlayıcıya veya döngüye gerek yoktur.
+    # Polling işlemini başlatmak yeterlidir, Actions job'ı sonlandığında
+    # script de sonlanacaktır.
+    # Ancak, düzgün bir kapanış (shutdown) sağlamak için updater.idle() kullanılabilir.
+    # Bu, SIGINT, SIGTERM gibi sinyalleri yakalayarak botun düzgün kapanmasını sağlar.
+    # GitHub Actions job'ı sonlandığında SIGTERM gönderir.
+    updater.idle() # Botu sinyal gelene kadar çalışır durumda tutar
 
-    try:
-        while time.time() - start_time < run_duration_seconds:
-            if not updater.running: # Eğer bir şekilde durduysa (örn: hata)
-                break
-            time.sleep(1) # CPU kullanımını azaltmak için kısa bir uyku
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Kapatma sinyali alındı veya süre doldu, bot durduruluyor.")
-    finally:
-        logger.info(f"Çalışma süresi doldu ({run_duration_seconds / 60} dakika). Bot kapatılıyor.")
-        shutdown(updater)
-        logger.info("Bot başarıyla kapatıldı.")
+    # idle() sonlandıktan sonra (örneğin bir sinyal ile), kapanış mesajı loglanabilir.
+    # shutdown() fonksiyonu artık doğrudan idle() tarafından yönetildiği için burada ayrıca çağrılmaz.
+    logger.info("Bot polling sonlandırıldı, uygulama kapatılıyor.")
+
 
 if __name__ == '__main__':
-    # Sinyal işleyicileri (isteğe bağlı, GitHub Actions için timeout daha önemli)
-    # signal.signal(signal.SIGINT, signal_handler)
-    # signal.signal(signal.SIGTERM, signal_handler)
+    # Sinyal işleyicilerini (signal.signal) burada tanımlamaya gerek yok,
+    # çünkü python-telegram-bot'un Updater.idle() metodu bunları zaten ele alıyor.
     main()
