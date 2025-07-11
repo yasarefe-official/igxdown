@@ -2,7 +2,7 @@
 
 Bu proje, Telegram üzerinden gönderilen Instagram video linklerini işleyerek, video indirme görevini GitHub Actions'a yaptıran ve sonucu kullanıcıya gönderen bir mimari sunar. Ana Telegram bot mantığı Koyeb üzerinde sürekli çalışırken, ağır yük olan video indirme ve işleme GitHub Actions üzerinde isteğe bağlı olarak gerçekleştirilir.
 
-**Bot Linki:** [IGXDOWN Bot](https://t.me/igxdown_bot) (Bu link, sizin deploy ettiğiniz botun linki olmalıdır)
+**Public Bot Linki:** [IGXDOWN Bot](https://t.me/igxdown_bot) (Bu link, herkesin kullanımı içindir)
 
 ## Mimarinin Özellikleri
 
