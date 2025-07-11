@@ -122,9 +122,12 @@ def link_handler(update: Update, context: CallbackContext):
         '--socket-timeout', '30', # 30 saniye
         # '--retries', '3', # Deneme sayısı (isteğe bağlı)
         '-o', os.path.join(download_dir, '%(id)s.%(ext)s'), # Çıktı şablonu
-        # Video formatı (önce mp4 dene, sonra en iyisi)
-        # En iyi video ve sesi birleştir, eğer mp4 ise direkt onu al.
-        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        # Video formatı:
+        # 1. En iyi mp4 video + en iyi m4a sesi birleştir.
+        # 2. Olmazsa, en iyi mp4 (sesli veya sessiz) al.
+        # 3. Olmazsa, en iyi video (herhangi bir format) + en iyi sesi (herhangi bir format) birleştir.
+        # 4. Olmazsa, en iyi (sesli veya sessiz, herhangi bir format) al.
+        '-f', 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b',
     ]
 
     if cookie_file:
