@@ -81,11 +81,10 @@ def cleanup_files(*paths):
 def start_command(update: Update, context: CallbackContext):
     user_name = update.effective_user.first_name
     update.message.reply_html(
-        f"Merhaba {user_name}! 👋\n"
-        "Bana bir Instagram Reel veya video linki gönder, senin için indirmeye çalışacağım.\n\n"
-        "Bu bot `yt-dlp` kullanmaktadır. İndirme sorunları yaşarsanız, "
-        "`INSTAGRAM_SESSIONID` ortam değişkeninin doğru ayarlandığından emin olun. "
-        "Detaylar için README dosyasına bakabilirsiniz."
+        f"Merhaba {user_name}! 👋\n\n"
+        "Instagram'dan video veya Reel indirmek için bana linkini göndermen yeterli.\n"
+        "Örneğin: <code>https://www.instagram.com/p/Cxyz123.../</code>\n\n"
+        "Botun kullanımıyla ilgili bir sorun yaşarsanız veya video indirilemezse, lütfen videonun herkese açık olduğundan emin olun veya daha sonra tekrar deneyin."
     )
 
 def link_handler(update: Update, context: CallbackContext):
@@ -178,16 +177,16 @@ def link_handler(update: Update, context: CallbackContext):
             logger.error(f"yt-dlp stderr:\n{process.stderr}")
 
             # Kullanıcıya daha anlamlı bir hata mesajı göstermeye çalışalım
-            if "Login required" in process.stderr or "login" in process.stderr.lower():
-                update.message.reply_text("Bu videoyu indirmek için Instagram girişi gerekiyor. Lütfen `INSTAGRAM_SESSIONID`'nin doğru ayarlandığından emin olun.")
+            if "Login required" in process.stderr or "login" in process.stderr.lower() or "Private video" in process.stderr:
+                update.message.reply_text("Bu video indirilemedi. Video gizli olabilir veya özel erişim gerektiriyor olabilir. Lütfen videonun herkese açık olduğundan emin olun.")
             elif "Unsupported URL" in process.stderr:
-                update.message.reply_text("Bu link desteklenmiyor veya geçersiz.")
-            elif "Private video" in process.stderr:
-                 update.message.reply_text("Bu video özel. İndirmek için geçerli bir `INSTAGRAM_SESSIONID` gereklidir.")
+                update.message.reply_text("Gönderdiğiniz link desteklenmiyor veya geçersiz görünüyor.")
             elif "403" in process.stderr or "Forbidden" in process.stderr:
-                 update.message.reply_text("Instagram erişimi engelledi (403 Forbidden). `INSTAGRAM_SESSIONID`'nizi kontrol edin veya daha sonra tekrar deneyin.")
-            else:
-                update.message.reply_text(error_message + " Detaylar loglandı.")
+                 update.message.reply_text("Instagram'a erişimde bir sorun oluştu (Erişim Engellendi). Lütfen daha sonra tekrar deneyin.")
+            elif process.returncode != 0 : # Diğer yt-dlp hataları
+                update.message.reply_text("Video indirilirken bir sorunla karşılaşıldı. Lütfen linki kontrol edin veya daha sonra tekrar deneyin.")
+            else: # Bu durum normalde olmamalı eğer returncode 0 değilse
+                update.message.reply_text(error_message + " Detaylar geliştirici loglarına kaydedildi.")
 
     except subprocess.TimeoutExpired:
         logger.error("yt-dlp zaman aşımına uğradı.")
