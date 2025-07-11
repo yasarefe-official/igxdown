@@ -21,6 +21,11 @@ jobs:
       with:
         python-version: '3.11' # Dockerfile'daki sürümle uyumlu veya projenin gerektirdiği sürüm
 
+    - name: Install ffmpeg
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y ffmpeg
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
