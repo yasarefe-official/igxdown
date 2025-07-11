@@ -2,6 +2,8 @@
 
 Bu proje, Telegram üzerinden gönderilen Instagram video linklerini indirip kullanıcıya gönderen bir Python botudur. Bot, GitHub Actions kullanılarak zamanlanmış görevlerle çalışır ve belirli saatlerde aktif olur.
 
+**Bot Linki:** [IGXDOWN Bot](https://t.me/igxdown_bot)
+
 ## Özellikler
 
 -   Instagram Reel ve video gönderilerini indirir.
