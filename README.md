@@ -1,11 +1,11 @@
 [Read in Turkish (Türkçe Oku)](README_tr.md)
 
 ---
-# Instagram Video Downloader Telegram Bot (Render + Docker)
+# IGXDOWN
 
 This project is a Python bot that downloads Instagram video links sent via Telegram and sends the video back to the user. It is designed to be hosted on [Render](https://render.com/) using `Dockerfile` for its entire functionality.
 
-**Bot Link:** [IGXDOWN Bot](https://t.me/igxdown_bot) (This should be the link to your deployed bot)
+**Bot Link:** [IGXDOWN Bot](https://t.me/igxdown_bot)
 
 ## Features
 
