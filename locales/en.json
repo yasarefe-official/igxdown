@@ -1,9 +1,9 @@
 {
-  "welcome": "Hello {user_name}! 👋\n\nJust send me a link to an Instagram Reel or video, and I'll download it for you.\nExample: <code>https://www.instagram.com/p/Cxyz123.../</code>",
+  "welcome_prompt": "Lütfen dilinizi seçin / Please select your language",
+  "language_selected": "✅ Language is set to English.\n\nHello {user_name}! 👋\n\nJust send me a link to an Instagram post (video, image, or reel), and I'll download it for you.\nExample: <code>https://www.instagram.com/p/Cxyz123.../</code>",
   "request_received": "Your request has been received, starting the download process... ⏳ Please wait.",
-  "download_success": "Here is your video! ✅",
-  "download_success_caption": "Here is your video! ✅ (Downloaded with IGXDOWN)",
-  "invalid_link": "Please send a valid Instagram video/reel link.",
+  "download_success_caption": "Here is your media! ✅ (Downloaded with IGXDOWN)",
+  "invalid_link": "Please send a valid Instagram post (video, image, or reel) link.",
   "error_private_video": "This video could not be downloaded. It might be private or require special access. Please make sure the video is public.",
   "error_unsupported_url": "The link you sent appears to be unsupported or invalid.",
   "error_forbidden": "There was a problem accessing Instagram (Access Forbidden). Please try again later.",

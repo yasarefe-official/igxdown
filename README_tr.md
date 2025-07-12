@@ -10,11 +10,13 @@ Bu proje, Telegram üzerinden gönderilen Instagram video linklerini indirip kul
 
 ## Özellikler
 
--   Instagram Reel ve video gönderilerini `yt-dlp` kullanarak indirir.
--   Kullanımı kolay Telegram bot arayüzü.
+-   Tek bir Instagram gönderisindeki **tüm medyaları (video ve fotoğraflar)** indirir.
+-   Birden fazla medyayı tek ve temiz bir mesaj grubu (`MediaGroup`) içinde gönderir.
+-   **Çoklu dil destekli** (TR/EN) kolay kullanım arayüzü.
+-   `/start` komutu ile manuel dil seçimi.
 -   Render üzerinde `Dockerfile` ile kolay ve güvenilir dağıtım (deployment).
 -   `ffmpeg` desteği sayesinde sesli video indirme.
--   Opsiyonel `INSTAGRAM_SESSIONID` kullanımı.
+-   İleri düzey durumlar için opsiyonel `INSTAGRAM_SESSIONID` kullanımı.
 
 ## Nasıl Çalışır?
 

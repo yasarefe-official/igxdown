@@ -9,12 +9,13 @@ This project is a Python bot that downloads Instagram video links sent via Teleg
 
 ## Features
 
--   Downloads Instagram Reels and video posts using `yt-dlp`.
--   Easy-to-use Telegram bot interface.
+-   Downloads **all media (videos and photos)** from a single Instagram post.
+-   Sends multiple media in a single, clean message group (`MediaGroup`).
+-   Easy-to-use Telegram bot interface with **multi-language support** (TR/EN).
+-   Manual language selection via the `/start` command.
 -   Simple and reliable deployment on Render with `Dockerfile`.
--   Audio support thanks to `ffmpeg` for merging video and audio streams.
+-   Audio support for videos thanks to `ffmpeg`.
 -   Optional `INSTAGRAM_SESSIONID` usage for advanced cases.
--   Multi-language support (English and Turkish).
 
 ## How It Works
 
