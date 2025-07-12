@@ -20,10 +20,7 @@ logger = logging.getLogger(__name__)
 
 # --- ÇOKLU DİL DESTEĞİ ---
 TRANSLATIONS = {}
-# Kullanıcıların dil tercihlerini saklamak için bellek içi sözlük
-# Not: Bot yeniden başladığında bu bilgiler kaybolur.
 USER_LANGS = {}
-# Konuşma durumları
 SELECTING_LANGUAGE = 0
 
 def load_translations():
@@ -42,7 +39,6 @@ def load_translations():
 def get_user_language(update: Update) -> str:
     """Kullanıcının seçtiği dili alır, yoksa varsayılanı döner."""
     user_id = update.effective_user.id
-    # Otomatik dil kodunu al, ama öncelik kullanıcının seçimi
     auto_lang_code = (update.effective_user.language_code or 'en').split('-')[0]
     return USER_LANGS.get(user_id, auto_lang_code)
 
@@ -132,43 +128,52 @@ def link_handler(update: Update, context: CallbackContext):
     download_dir = f"temp_dl_{user_id}_{uuid4()}"
     os.makedirs(download_dir, exist_ok=True)
 
-    # -f (format) parametresini kaldırarak tüm medyaları indir
-    yt_dlp_command = ['yt-dlp', '--no-warnings', '--force-overwrites', '--no-playlist', '--socket-timeout', '60', '-o', os.path.join(download_dir, '%(id)s_%(n)s.%(ext)s')]
+    yt_dlp_command = [
+        'yt-dlp', '--no-warnings', '--force-overwrites', '--no-playlist',
+        '--socket-timeout', '60', '--ignore-no-formats-error',
+        '-o', os.path.join(download_dir, '%(id)s_%(n)s.%(ext)s')
+    ]
     if cookie_file: yt_dlp_command.extend(['--cookies', cookie_file])
     yt_dlp_command.append(post_url)
 
     try:
         process = subprocess.run(yt_dlp_command, capture_output=True, text=True, check=False, timeout=300)
-        if process.returncode == 0:
-            downloaded_files = sorted([os.path.join(download_dir, f) for f in os.listdir(download_dir)])
-            if not downloaded_files:
-                raise FileNotFoundError("yt-dlp klasörü boş.")
 
-            # Medyaları 10'arlı gruplara ayır (Telegram limiti)
+        downloaded_files = sorted([os.path.join(download_dir, f) for f in os.listdir(download_dir) if f.endswith(('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mkv', '.webm'))])
+
+        # İlk mesajı sil veya düzenle
+        message_to_edit.delete()
+
+        if downloaded_files:
             media_groups = [downloaded_files[i:i + 10] for i in range(0, len(downloaded_files), 10)]
-
-            # İlk mesajı sil veya düzenle
-            message_to_edit.delete()
 
             for i, group in enumerate(media_groups):
                 media_to_send = []
                 for file_path in group:
+                    # Dosya açma işlemlerini send_media_group'a yakın yapmak daha iyi olabilir, ama şimdilik burada tutalım.
+                    # Dosyaların düzgün kapatıldığından emin olmak önemli.
+                    media_file = open(file_path, 'rb')
                     if file_path.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                        media_to_send.append(InputMediaPhoto(media=open(file_path, 'rb')))
+                        media_to_send.append(InputMediaPhoto(media=media_file))
                     elif file_path.endswith(('.mp4', '.mkv', '.webm')):
-                        media_to_send.append(InputMediaVideo(media=open(file_path, 'rb')))
+                        media_to_send.append(InputMediaVideo(media=media_file))
 
                 if media_to_send:
-                    # Sadece ilk gruba başlık ekle
                     if i == 0:
                         media_to_send[0].caption = get_translation(user_lang, "download_success_caption")
 
                     context.bot.send_media_group(chat_id=user_id, media=media_to_send, timeout=180)
+
+        # Eğer hiç dosya indirilmemişse, o zaman hatayı kontrol et
+        elif process.returncode != 0:
+            raise Exception(f"yt-dlp returned error code {process.returncode} and no files were downloaded. stderr: {process.stderr}")
         else:
-            raise Exception(f"yt-dlp hata kodu: {process.returncode}. stderr: {process.stderr}")
+            # Bu durum, yt-dlp'nin hata vermediği ama hiç dosya indirmediği nadir bir durumdur.
+            logger.warning("yt-dlp ran successfully but downloaded no files.")
+            update.message.reply_text(get_translation(user_lang, "error_yt_dlp"))
 
     except Exception as e:
-        message_to_edit.delete()
+        # message_to_edit.delete() zaten silindi, tekrar silmeye çalışmamalıyız.
         error_text = str(e).lower()
         logger.error(f"İndirme hatası: {e}")
         if "login required" in error_text or "private" in error_text:
@@ -196,7 +201,6 @@ def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dispatcher = updater.dispatcher
 
-    # Dil seçimi için ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
