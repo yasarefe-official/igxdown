@@ -1,0 +1,13 @@
+{
+  "welcome": "Merhaba {user_name}! 👋\n\nInstagram'dan video veya Reel indirmek için bana linkini göndermen yeterli.\nÖrneğin: <code>https://www.instagram.com/p/Cxyz123.../</code>",
+  "request_received": "İsteğiniz alındı, indirme işlemi başlatılıyor... ⏳ Lütfen bekleyin.",
+  "download_success": "İşte videon! ✅",
+  "download_success_caption": "İşte videon! ✅ (IGXDOWN ile indirildi)",
+  "invalid_link": "Lütfen geçerli bir Instagram video/reel linki gönderin.",
+  "error_private_video": "Bu video indirilemedi. Video gizli olabilir veya özel erişim gerektiriyor olabilir. Lütfen videonun herkese açık olduğundan emin olun.",
+  "error_unsupported_url": "Gönderdiğiniz link desteklenmiyor veya geçersiz görünüyor.",
+  "error_forbidden": "Instagram'a erişimde bir sorun oluştu (Erişim Engellendi). Lütfen daha sonra tekrar deneyin.",
+  "error_yt_dlp": "Video indirilirken bir sorunla karşılaşıldı. Lütfen linki kontrol edin veya daha sonra tekrar deneyin.",
+  "error_timeout": "Video indirme işlemi çok uzun sürdüğü için zaman aşımına uğradı.",
+  "error_generic": "İşlem sırasında beklenmedik bir sorun oluştu. Lütfen daha sonra tekrar deneyin."
+}
