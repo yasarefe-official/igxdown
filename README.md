@@ -1,4 +1,5 @@
-# Instagram Video İndirme Telegram Botu (Render + Docker)
+# IGXDOWN
+
 
 Bu proje, Telegram üzerinden gönderilen Instagram video linklerini indirip kullanıcıya gönderen bir Python botudur. Bot, tüm işlevselliğiyle birlikte [Render](https://render.com/) üzerinde `Dockerfile` kullanılarak barındırılmak üzere tasarlanmıştır.
 
