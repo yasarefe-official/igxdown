@@ -1,90 +1,95 @@
-# IGXDOWN
+[Read in Turkish (Türkçe Oku)](README_tr.md)
 
+---
+# Instagram Video Downloader Telegram Bot (Render + Docker)
 
-Bu proje, Telegram üzerinden gönderilen Instagram video linklerini indirip kullanıcıya gönderen bir Python botudur. Bot, tüm işlevselliğiyle birlikte [Render](https://render.com/) üzerinde `Dockerfile` kullanılarak barındırılmak üzere tasarlanmıştır.
+This project is a Python bot that downloads Instagram video links sent via Telegram and sends the video back to the user. It is designed to be hosted on [Render](https://render.com/) using `Dockerfile` for its entire functionality.
 
-**Bot Linki:** [IGXDOWN Bot](https://t.me/igxdown_bot) (Bu link, sizin deploy ettiğiniz botun linki olmalıdır)
+**Bot Link:** [IGXDOWN Bot](https://t.me/igxdown_bot) (This should be the link to your deployed bot)
 
-## Özellikler
+## Features
 
--   Instagram Reel ve video gönderilerini `yt-dlp` kullanarak indirir.
--   Kullanımı kolay Telegram bot arayüzü.
--   Render üzerinde `Dockerfile` ile kolay ve güvenilir dağıtım (deployment).
--   `ffmpeg` desteği sayesinde sesli video indirme.
--   Opsiyonel `INSTAGRAM_SESSIONID` kullanımı.
+-   Downloads Instagram Reels and video posts using `yt-dlp`.
+-   Easy-to-use Telegram bot interface.
+-   Simple and reliable deployment on Render with `Dockerfile`.
+-   Audio support thanks to `ffmpeg` for merging video and audio streams.
+-   Optional `INSTAGRAM_SESSIONID` usage for advanced cases.
+-   Multi-language support (English and Turkish).
 
-## Nasıl Çalışır?
+## How It Works
 
-Bu bot, `python-telegram-bot` kütüphanesi ile Telegram API'sine bağlanır. Video indirme ve Telegram'a gönderme işlemleri `bot.py` script'i tarafından yönetilir. Script, video indirmek için popüler ve güçlü bir komut satırı aracı olan `yt-dlp`'yi `subprocess` modülü aracılığıyla çalıştırır.
+This bot connects to the Telegram API using the `python-telegram-bot` library. Video downloading and sending are managed by the `bot.py` script. The script uses `yt-dlp`, a popular and powerful command-line tool, by running it through the `subprocess` module.
 
-Video ve ses akışlarını birleştirmek için gerekli olan `ffmpeg` bağımlılığı, proje kök dizinindeki `Dockerfile` aracılığıyla otomatik olarak kurulur.
+The `ffmpeg` dependency, which is necessary for merging separate video and audio streams, is automatically installed via the `Dockerfile` in the project's root directory.
 
-Bot, Render üzerinde bir "Worker Service" olarak sürekli çalışır ve Telegram'dan gelen mesajları dinler.
+The bot runs continuously as a "Worker Service" on Render, listening for incoming messages from Telegram.
 
-## Kurulum ve Kullanım (Bu Depoyu Forklayarak Kendi Botunuzu Oluşturmak İçin)
+## Setup and Deployment (To Create Your Own Bot by Forking This Repository)
 
-Bu botu kendi Telegram hesabınızla Render üzerinde çalıştırmak için aşağıdaki adımları izleyin:
+Follow these steps to run this bot with your own Telegram account on Render:
 
-### 1. Ön Hazırlık
+### 1. Prerequisites
 
-1.  **Bu Depoyu Forklayın:** Bu GitHub deposunu kendi hesabınıza forklayın.
-2.  **Telegram Bot Token'ı Alın:**
-    *   Eğer bir botunuz yoksa, Telegram'da [BotFather](https://t.me/BotFather) ile konuşun.
-    *   `/newbot` komutunu kullanarak yeni bir bot oluşturun ve talimatları izleyin.
-    *   BotFather'ın size vereceği **API token**'ını kopyalayın. Bu token gizli tutulmalıdır.
+1.  **Fork this Repository:** Fork this GitHub repository to your own account.
+2.  **Get a Telegram Bot Token:**
+    *   If you don't have a bot, talk to [BotFather](https://t.me/BotFather) on Telegram.
+    *   Use the `/newbot` command to create a new bot and follow the instructions.
+    *   Copy the **API token** that BotFather gives you. This token must be kept secret.
 
-### 2. Render'da Deploy Etme
+### 2. Deploying on Render
 
-1.  **Render Hesabı Oluşturun/Giriş Yapın:** [Render.com](https://render.com/) adresine gidin. GitHub hesabınızla giriş yapmanız, depolarınıza erişimi kolaylaştıracaktır.
-2.  **Yeni Bir Servis Oluşturun:**
-    *   Render kontrol panelinde **"New +" > "Worker Service"** seçeneğini seçin. Bot sürekli arka planda çalışacağı için bu en uygun servis türüdür.
-3.  **Deponuzu Bağlayın:**
-    *   GitHub hesabınızı Render'a bağlayın ve forkladığınız bu depoyu listeden seçip "Connect" butonuna tıklayın.
-4.  **Servisi Yapılandırın:**
-    *   **Name:** Servisinize bir isim verin (örn: `igxdown-bot`).
-    *   **Region:** Size en yakın bir bölge seçin (örn: `Frankfurt`).
-    *   **Branch:** `main` dalını seçin.
-    *   **Runtime:** Render, deponuzdaki `Dockerfile`'ı otomatik olarak algılayacaktır. "Runtime" olarak **"Docker"** seçildiğinden emin olun. Bu durumda "Build Command" ve "Start Command" alanlarını doldurmanıza gerek kalmaz.
-    *   **Instance Type:** Ücretsiz plan (`Free`) ile başlayabilirsiniz.
-5.  **Ortam Değişkenlerini (Environment Variables) Ekleyin:**
-    *   "Advanced" bölümüne gidin ve "Add Environment Variable" butonuna tıklayarak aşağıdaki değişkenleri ekleyin:
-        *   **`TELEGRAM_TOKEN`**: Değer olarak BotFather'dan aldığınız API token'ını yapıştırın.
-        *   **`INSTAGRAM_SESSIONID`** (Opsiyonel): Eğer özel videoları indirmek veya bazı erişim sorunlarını aşmak istiyorsanız, buraya kendi Instagram `sessionid`'nizi ekleyebilirsiniz.
-6.  **Deploy Edin:**
-    *   "Create Worker Service" butonuna tıklayın.
-    *   Render, GitHub deponuzdaki kodu çekecek, `Dockerfile`'ı kullanarak bir imaj oluşturacak (bu adımda `ffmpeg` ve Python bağımlılıkları kurulacak) ve son olarak botunuzu başlatacaktır.
-7.  **Logları Kontrol Edin:**
-    *   Deploy işlemi bittikten sonra, Render kontrol panelindeki "Logs" sekmesinden botunuzun loglarını takip edebilirsiniz. "Bot başlatıldı..." gibi mesajları gördüğünüzde, botunuz başarıyla çalışıyor demektir.
+1.  **Create/Login to Your Render Account:** Go to [Render.com](https://render.com/). Signing in with your GitHub account will make it easier to access your repositories.
+2.  **Create a New Service:**
+    *   On the Render dashboard, click **"New +" > "Worker Service"**. This is the most suitable service type as the bot will run continuously in the background.
+3.  **Connect Your Repository:**
+    *   Connect your GitHub account to Render and select the repository you forked from the list, then click "Connect".
+4.  **Configure the Service:**
+    *   **Name:** Give your service a name (e.g., `igxdown-bot`).
+    *   **Region:** Choose a region closest to you (e.g., `Frankfurt`).
+    *   **Branch:** Select the `main` branch.
+    *   **Runtime:** Render will automatically detect the `Dockerfile` in your repository. Make sure **"Docker"** is selected as the runtime. In this case, you do not need to fill in the "Build Command" and "Start Command" fields.
+    *   **Instance Type:** You can start with the `Free` plan.
+5.  **Add Environment Variables:**
+    *   Go to the "Advanced" section and click "Add Environment Variable". Add the following variables:
+        *   **`TELEGRAM_TOKEN`**: Paste the API token you got from BotFather.
+        *   **`INSTAGRAM_SESSIONID`** (Optional): If you want to download private videos or bypass some access issues, you can add your Instagram `sessionid` here.
+6.  **Deploy:**
+    *   Click the "Create Worker Service" button.
+    *   Render will pull the code from your GitHub repository, build an image using the `Dockerfile` (installing `ffmpeg` and Python dependencies in this step), and finally start your bot.
+7.  **Check the Logs:**
+    *   After the deployment is complete, you can monitor your bot's logs from the "Logs" tab in the Render dashboard. When you see messages like "Bot started...", your bot is running successfully.
 
-## Geliştiriciler İçin Notlar
+## Notes for Developers
 
-### `INSTAGRAM_SESSIONID` Kullanımı (Opsiyonel)
+### Using `INSTAGRAM_SESSIONID` (Optional)
 
-Bu bot, çoğu herkese açık videoyu `sessionid` olmadan da indirebilir. Ancak, aşağıdaki durumlarda Render'da `INSTAGRAM_SESSIONID` ortam değişkenini ayarlamak faydalı olabilir:
--   **Özel (Private) Hesaplardan Video İndirme.**
--   **Giriş Gerektiren Videolar.**
--   **Rate Limiting / Engelleme Sorunları:** Anonim isteklerin Instagram tarafından sık sık kısıtlandığı veya engellendiği durumlarda.
+This bot can download most public videos without a `sessionid`. However, setting the `INSTAGRAM_SESSIONID` environment variable in Render can be useful in the following cases:
+-   **Downloading from Private Accounts.**
+-   **Videos that Require Login.**
+-   **Bypassing Rate Limiting / Blocking Issues:** When anonymous requests are frequently restricted or blocked by Instagram.
 
-Bot, bu ortam değişkeni ayarlanmışsa, `yt-dlp`'ye bu bilgiyi bir cookie dosyası aracılığıyla otomatik olarak iletir.
+If this environment variable is set, the bot will automatically pass this information to `yt-dlp` via a cookie file.
 
-**`INSTAGRAM_SESSIONID` Nasıl Alınır?**
-1.  Tarayıcınızda Instagram.com'a gidin ve hesabınıza giriş yapın.
-2.  Geliştirici araçlarını açın (genellikle F12).
-3.  `Application` (Chrome/Edge) veya `Storage` (Firefox) sekmesinden `Cookies` > `https://www.instagram.com` yolunu izleyin.
-4.  `sessionid` adlı çerezi bulun ve değerini kopyalayın.
-5.  Bu değeri, Render'daki servisinizin ortam değişkenlerine `INSTAGRAM_SESSIONID` adıyla ekleyin.
+**How to get `INSTAGRAM_SESSIONID`?**
+1.  Go to Instagram.com in your browser and log in to your account.
+2.  Open the developer tools (usually F12).
+3.  Navigate to the `Application` (Chrome/Edge) or `Storage` (Firefox) tab and find `Cookies` > `https://www.instagram.com`.
+4.  Find the cookie named `sessionid` and copy its value.
+5.  Add this value to your service's environment variables on Render with the name `INSTAGRAM_SESSIONID`.
 
-## Dosya Yapısı
+## File Structure
 
--   `bot.py`: Ana Telegram bot uygulamasının Python kodunu içerir.
--   `requirements.txt`: Gerekli Python kütüphanelerini listeler.
--   `Dockerfile`: Render'da uygulamanın çalışacağı ortamı (Python + ffmpeg) oluşturan talimatları içerir.
--   `README.md`: Bu dosya.
+-   `bot.py`: Contains the Python code for the main Telegram bot application.
+-   `requirements.txt`: Lists the required Python libraries.
+-   `Dockerfile`: Contains instructions to build the environment (Python + ffmpeg) where the application will run on Render.
+-   `locales/`: Contains JSON files for multi-language support (`tr.json`, `en.json`).
+-   `README.md`: This file (English).
+-   `README_tr.md`: Turkish version of the README.
 
-## Katkıda Bulunma
+## Contributing
 
-Katkılarınızı bekliyoruz! Lütfen bir issue açın veya pull request gönderin.
+Contributions are welcome! Please open an issue or submit a pull request.
 
-## Lisans
+## License
 
-Bu proje MIT Lisansı ile lisanslanmıştır.
+This project is licensed under the MIT License.
