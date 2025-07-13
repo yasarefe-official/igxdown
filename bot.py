@@ -6,11 +6,10 @@ from uuid import uuid4
 import time
 import json
 import glob
-from math import ceil
-import threading # Arka planda botu çalıştırmak için
+import threading
 
-from flask import Flask # Web server için
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo
+from flask import Flask
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters, CallbackContext,
     ConversationHandler, CallbackQueryHandler
@@ -21,12 +20,10 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- FLASK UYGULAMASI ---
-# Render'ın "Port scan timeout" hatasını çözmek için.
 app = Flask(__name__)
 
 @app.route('/')
 def index():
-    """Render'ın sağlık kontrolleri için basit bir endpoint."""
     return "Bot is running!", 200
 
 # --- ÇOKLU DİL DESTEĞİ ---
@@ -64,11 +61,6 @@ def get_translation(lang_code, key, **kwargs):
 # --- ORTAM DEĞİŞKENLERİ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SESSION_ID = os.getenv("INSTAGRAM_SESSIONID")
-
-if not TELEGRAM_TOKEN:
-    logger.critical("TELEGRAM_TOKEN ortam değişkeni eksik. Uygulama başlatılamıyor.")
-    # Flask context'i dışında olduğumuz için exit() güvenli
-    exit()
 
 # --- YARDIMCI FONKSİYONLAR ---
 def create_cookie_file(session_id_value: str, user_id: str) -> str:
@@ -115,50 +107,43 @@ def language_button(update: Update, context: CallbackContext) -> int:
 def link_handler(update: Update, context: CallbackContext):
     user_lang = get_user_language(update)
     user_id = str(update.effective_user.id)
-    post_url = update.message.text
-    if "instagram.com/" not in post_url:
+    video_url = update.message.text
+    if "instagram.com/" not in video_url:
         update.message.reply_text(get_translation(user_lang, "invalid_link"))
         return
     message_to_edit = context.bot.send_message(chat_id=user_id, text=get_translation(user_lang, "request_received"))
     cookie_file = create_cookie_file(SESSION_ID, user_id) if SESSION_ID else None
     download_dir = f"temp_dl_{user_id}_{uuid4()}"
     os.makedirs(download_dir, exist_ok=True)
-    yt_dlp_command = ['yt-dlp', '--no-warnings', '--force-overwrites', '--no-playlist', '--socket-timeout', '60', '--ignore-no-formats-error', '-o', os.path.join(download_dir, '%(id)s_%(n)s.%(ext)s')]
+
+    yt_dlp_command = [
+        'yt-dlp', '--no-warnings', '--force-overwrites', '--no-playlist',
+        '--socket-timeout', '60',
+        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        '-o', os.path.join(download_dir, '%(id)s.%(ext)s')
+    ]
     if cookie_file: yt_dlp_command.extend(['--cookies', cookie_file])
-    yt_dlp_command.append(post_url)
+    yt_dlp_command.append(video_url)
+
     try:
         process = subprocess.run(yt_dlp_command, capture_output=True, text=True, check=False, timeout=300)
-        downloaded_files = sorted([os.path.join(download_dir, f) for f in os.listdir(download_dir) if f.endswith(('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mkv', '.webm'))])
         message_to_edit.delete()
-        if downloaded_files:
-            media_groups = [downloaded_files[i:i + 10] for i in range(0, len(downloaded_files), 10)]
-            for i, group in enumerate(media_groups):
-                media_to_send = []
-                # Dosyaları açıp hemen kapatmak için bir liste
-                open_files = []
-                for file_path in group:
-                    media_file = open(file_path, 'rb')
-                    open_files.append(media_file)
-                    if file_path.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                        media_to_send.append(InputMediaPhoto(media=media_file))
-                    elif file_path.endswith(('.mp4', '.mkv', '.webm')):
-                        media_to_send.append(InputMediaVideo(media=media_file))
-                if media_to_send:
-                    if i == 0:
-                        media_to_send[0].caption = get_translation(user_lang, "download_success_caption")
-                    context.bot.send_media_group(chat_id=user_id, media=media_to_send, timeout=180)
-                # Dosyaları kapattığımızdan emin olalım
-                for f in open_files:
-                    f.close()
-        elif process.returncode != 0:
-            raise Exception(f"yt-dlp returned error code {process.returncode} and no files were downloaded. stderr: {process.stderr}")
+
+        if process.returncode == 0:
+            downloaded_files = [os.path.join(download_dir, f) for f in os.listdir(download_dir) if f.endswith(('.mp4', '.mkv', '.webm'))]
+            if downloaded_files:
+                video_path = downloaded_files[0]
+                with open(video_path, 'rb') as video_file:
+                    context.bot.send_video(chat_id=user_id, video=video_file, caption=get_translation(user_lang, "download_success_caption"), timeout=180)
+            else:
+                logger.warning("yt-dlp çalıştı ancak video dosyası bulunamadı. Muhtemelen link bir resim gönderisine aitti.")
+                update.message.reply_text(get_translation(user_lang, "error_unsupported_url"))
         else:
-            logger.warning("yt-dlp ran successfully but downloaded no files.")
-            update.message.reply_text(get_translation(user_lang, "error_yt_dlp"))
+            raise Exception(f"yt-dlp returned error code {process.returncode}. stderr: {process.stderr}")
     except Exception as e:
-        if 'message_to_edit' in locals() and message_to_edit:
+        if 'message_to_edit' in locals() and message_to_edit.message_id:
             try: message_to_edit.delete()
-            except: pass
+            except Exception: pass # Mesaj zaten silinmiş olabilir
         error_text = str(e).lower()
         logger.error(f"İndirme hatası: {e}")
         if "login required" in error_text or "private" in error_text:
@@ -180,14 +165,11 @@ def error_handler(update: Update, context: CallbackContext):
         user_lang = get_user_language(update)
         update.effective_message.reply_text(get_translation(user_lang, "error_generic"))
 
-# --- ANA UYGULAMA FONKSİYONU ---
 def run_telegram_bot():
-    """Telegram botunu başlatan ve çalıştıran fonksiyon."""
     try:
         if not TELEGRAM_TOKEN:
             logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot thread'i başlatılamıyor.")
             return
-
         load_translations()
         updater = Updater(TELEGRAM_TOKEN, use_context=True)
         dispatcher = updater.dispatcher
@@ -199,34 +181,18 @@ def run_telegram_bot():
         dispatcher.add_handler(conv_handler)
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
         dispatcher.add_error_handler(error_handler)
-
         updater.start_polling()
         logger.info("Telegram botu arka planda polling modunda başlatıldı.")
-
-        # updater.idle() sinyal dinlediği ve sadece ana thread'de çalıştığı için
-        # arka plan thread'inde hata verir. Bunun yerine, thread'i canlı tutmak için
-        # updater'ın kendi running durumunu kontrol eden bir döngü kullanıyoruz.
         while updater.running:
             time.sleep(5)
-
         logger.info("Bot polling döngüsü sonlandı.")
-
     except Exception as e:
-        # Bot thread'inde oluşabilecek herhangi bir kritik hatayı yakala ve logla.
-        # Bu, thread'in sessizce ölmesini engeller ve hatayı görünür kılar.
         logger.exception("Bot thread'inde yakalanamayan bir istisna oluştu ve thread sonlandırıldı.")
 
-# --- UYGULAMAYI BAŞLATMA ---
-# Gunicorn bu dosyayı import ettiğinde, aşağıdaki kodlar çalışacak ve
-# bot thread'i otomatik olarak başlayacaktır.
 bot_thread = threading.Thread(target=run_telegram_bot)
 bot_thread.daemon = True
 bot_thread.start()
 
-# Lokal testler için, bu dosyayı doğrudan çalıştırdığınızda
-# Flask'ın kendi geliştirme sunucusunu kullanabilirsiniz.
 if __name__ == '__main__':
-    # Render, PORT ortam değişkenini otomatik olarak sağlar.
     port = int(os.environ.get('PORT', 8080))
-    # debug=False üretim için daha güvenlidir.
     app.run(host='0.0.0.0', port=port, debug=False)
