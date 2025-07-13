@@ -24,7 +24,7 @@ Bu bot, `python-telegram-bot` kütüphanesi ile Telegram API'sine bağlanır. Vi
 
 Video ve ses akışlarını birleştirmek için gerekli olan `ffmpeg` bağımlılığı, proje kök dizinindeki `Dockerfile` aracılığıyla otomatik olarak kurulur.
 
-Bot, Render üzerinde bir "Worker Service" olarak sürekli çalışır ve Telegram'dan gelen mesajları dinler.
+Bot, Render üzerinde bir **"Web Service"** olarak deploy edilir. Render'ın port bağlantı gereksinimini karşılamak ve sağlık kontrollerine yanıt vermek için `Flask` kullanarak minimal bir web sayfası sunar. Ana Telegram bot mantığı ise arka planda bir thread üzerinde sürekli çalışarak mesajları dinler.
 
 ## Kurulum ve Kullanım (Bu Depoyu Forklayarak Kendi Botunuzu Oluşturmak İçin)
 
@@ -42,7 +42,7 @@ Bu botu kendi Telegram hesabınızla Render üzerinde çalıştırmak için aşa
 
 1.  **Render Hesabı Oluşturun/Giriş Yapın:** [Render.com](https://render.com/) adresine gidin. GitHub hesabınızla giriş yapmanız, depolarınıza erişimi kolaylaştıracaktır.
 2.  **Yeni Bir Servis Oluşturun:**
-    *   Render kontrol panelinde **"New +" > "Worker Service"** seçeneğini seçin. Bot sürekli arka planda çalışacağı için bu en uygun servis türüdür.
+    *   Render kontrol panelinde **"New +" > "Web Service"** seçeneğini seçin.
 3.  **Deponuzu Bağlayın:**
     *   GitHub hesabınızı Render'a bağlayın ve forkladığınız bu depoyu listeden seçip "Connect" butonuna tıklayın.
 4.  **Servisi Yapılandırın:**

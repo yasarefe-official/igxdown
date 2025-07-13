@@ -3,7 +3,7 @@
 ---
 # IGXDOWN
 
-This project is a Python bot that downloads Instagram video links sent via Telegram and sends the video back to the user. It is designed to be hosted on [Render](https://render.com/) using `Dockerfile` for its entire functionality.
+This project is a Python bot that downloads Instagram video links sent via Telegram and sends the video back to the user. It is designed to be hosted on [Render](https://render.com/) as a **Web Service**, using `Dockerfile` for its entire functionality. It uses `Flask` to serve a simple web page to meet Render's port binding requirements.
 
 **Bot Link:** [IGXDOWN Bot](https://t.me/igxdown_bot)
 
@@ -23,7 +23,7 @@ This bot connects to the Telegram API using the `python-telegram-bot` library. V
 
 The `ffmpeg` dependency, which is necessary for merging separate video and audio streams, is automatically installed via the `Dockerfile` in the project's root directory.
 
-The bot runs continuously as a "Worker Service" on Render, listening for incoming messages from Telegram.
+The bot is deployed as a **Web Service** on Render. It uses `Flask` to serve a minimal web page, which satisfies Render's requirement for a bound port and allows for health checks. The main Telegram bot logic runs in a background thread, continuously listening for messages.
 
 ## Setup and Deployment (To Create Your Own Bot by Forking This Repository)
 
@@ -41,7 +41,7 @@ Follow these steps to run this bot with your own Telegram account on Render:
 
 1.  **Create/Login to Your Render Account:** Go to [Render.com](https://render.com/). Signing in with your GitHub account will make it easier to access your repositories.
 2.  **Create a New Service:**
-    *   On the Render dashboard, click **"New +" > "Worker Service"**. This is the most suitable service type as the bot will run continuously in the background.
+    *   On the Render dashboard, click **"New +" > "Web Service"**.
 3.  **Connect Your Repository:**
     *   Connect your GitHub account to Render and select the repository you forked from the list, then click "Connect".
 4.  **Configure the Service:**

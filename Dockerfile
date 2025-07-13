@@ -36,4 +36,9 @@ COPY . .
 
 # 6. Uygulamayı çalıştır
 # - Render bu komutu, container'ı (uygulama ortamını) başlatmak için kullanacak.
-CMD ["python", "bot.py"]
+# - Gunicorn'u kullanarak Flask uygulamasını başlat.
+# - Render, $PORT ortam değişkenini otomatik olarak sağlar.
+# - bot:app -> bot.py dosyasındaki app adlı Flask nesnesini bulur.
+# - --workers 4: Render'ın planına göre ayarlanabilecek worker sayısı. 1 ile başlamak güvenlidir.
+# - --timeout 120: Bir worker'ın yanıt vermesi için beklenecek maksimum süre.
+CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "--workers", "1", "bot:app"]
