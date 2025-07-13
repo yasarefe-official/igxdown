@@ -199,9 +199,17 @@ def run_telegram_bot():
         dispatcher.add_handler(conv_handler)
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
         dispatcher.add_error_handler(error_handler)
+
         updater.start_polling()
         logger.info("Telegram botu arka planda polling modunda başlatıldı.")
-        updater.idle()
+
+    # updater.idle() sinyal dinlediği ve sadece ana thread'de çalıştığı için
+    # arka plan thread'inde hata verir. Bunun yerine, thread'i canlı tutmak için
+    # updater'ın kendi running durumunu kontrol eden bir döngü kullanıyoruz.
+    while updater.running:
+        time.sleep(5)
+
+    logger.info("Bot polling döngüsü sonlandı.")
     except Exception as e:
         # Bot thread'inde oluşabilecek herhangi bir kritik hatayı yakala ve logla.
         # Bu, thread'in sessizce ölmesini engeller ve hatayı görünür kılar.
