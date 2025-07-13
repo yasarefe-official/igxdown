@@ -108,10 +108,13 @@ def link_handler(update: Update, context: CallbackContext):
     user_lang = get_user_language(update)
     user_id = str(update.effective_user.id)
     video_url = update.message.text
+
     if "instagram.com/" not in video_url:
         update.message.reply_text(get_translation(user_lang, "invalid_link"))
         return
+
     message_to_edit = context.bot.send_message(chat_id=user_id, text=get_translation(user_lang, "request_received"))
+
     cookie_file = create_cookie_file(SESSION_ID, user_id) if SESSION_ID else None
     download_dir = f"temp_dl_{user_id}_{uuid4()}"
     os.makedirs(download_dir, exist_ok=True)
@@ -122,24 +125,28 @@ def link_handler(update: Update, context: CallbackContext):
         '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         '-o', os.path.join(download_dir, '%(id)s.%(ext)s')
     ]
-    if cookie_file: yt_dlp_command.extend(['--cookies', cookie_file])
+    if cookie_file:
+        yt_dlp_command.extend(['--cookies', cookie_file])
     yt_dlp_command.append(video_url)
 
     try:
         process = subprocess.run(yt_dlp_command, capture_output=True, text=True, check=False, timeout=300)
         message_to_edit.delete()
 
-        if process.returncode == 0:
-            downloaded_files = [os.path.join(download_dir, f) for f in os.listdir(download_dir) if f.endswith(('.mp4', '.mkv', '.webm'))]
-            if downloaded_files:
-                video_path = downloaded_files[0]
-                with open(video_path, 'rb') as video_file:
-                    context.bot.send_video(chat_id=user_id, video=video_file, caption=get_translation(user_lang, "download_success_caption"), timeout=180)
-            else:
-                logger.warning("yt-dlp çalıştı ancak video dosyası bulunamadı. Muhtemelen link bir resim gönderisine aitti.")
-                update.message.reply_text(get_translation(user_lang, "error_unsupported_url"))
-        else:
+        # `process.returncode != 0` ise doğrudan hataya git
+        if process.returncode != 0:
             raise Exception(f"yt-dlp returned error code {process.returncode}. stderr: {process.stderr}")
+
+        # Başarılıysa, indirilen dosyayı bul (walrus operatörü ile)
+        if downloaded_files := [os.path.join(download_dir, f) for f in os.listdir(download_dir) if f.endswith(('.mp4', '.mkv', '.webm'))]:
+            video_path = downloaded_files[0]
+            with open(video_path, 'rb') as video_file:
+                context.bot.send_video(chat_id=user_id, video=video_file, caption=get_translation(user_lang, "download_success_caption"), timeout=180)
+        else:
+            # Bu durum, yt-dlp'nin hata vermediği ama video dosyası oluşturmadığı anlamına gelir (örn: resim gönderisi).
+            logger.warning("yt-dlp ran successfully but no video file was found. It was likely an image post.")
+            update.message.reply_text(get_translation(user_lang, "error_unsupported_url"))
+
     except Exception as e:
         if 'message_to_edit' in locals() and message_to_edit.message_id:
             try: message_to_edit.delete()
