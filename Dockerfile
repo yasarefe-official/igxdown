@@ -39,6 +39,7 @@ COPY . .
 # - Gunicorn'u kullanarak Flask uygulamasını başlat.
 # - Render, $PORT ortam değişkenini otomatik olarak sağlar.
 # - bot:app -> bot.py dosyasındaki app adlı Flask nesnesini bulur.
-# - --workers 4: Render'ın planına göre ayarlanabilecek worker sayısı. 1 ile başlamak güvenlidir.
+# - --workers 1: Render'ın ücretsiz planları için 1 worker genellikle yeterlidir.
 # - --timeout 120: Bir worker'ın yanıt vermesi için beklenecek maksimum süre.
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "--workers", "1", "bot:app"]
+# CMD komutunun shell formu, $PORT gibi ortam değişkenlerinin doğru şekilde okunmasını sağlar.
+CMD gunicorn --bind 0.0.0.0:$PORT --workers 1 bot:app

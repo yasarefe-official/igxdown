@@ -183,24 +183,29 @@ def error_handler(update: Update, context: CallbackContext):
 # --- ANA UYGULAMA FONKSİYONU ---
 def run_telegram_bot():
     """Telegram botunu başlatan ve çalıştıran fonksiyon."""
-    if not TELEGRAM_TOKEN:
-        logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot thread'i başlatılamıyor.")
-        return
+    try:
+        if not TELEGRAM_TOKEN:
+            logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot thread'i başlatılamıyor.")
+            return
 
-    load_translations()
-    updater = Updater(TELEGRAM_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
-        fallbacks=[CommandHandler('start', start)],
-    )
-    dispatcher.add_handler(conv_handler)
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
-    dispatcher.add_error_handler(error_handler)
-    updater.start_polling()
-    logger.info("Telegram botu arka planda polling modunda başlatıldı.")
-    updater.idle()
+        load_translations()
+        updater = Updater(TELEGRAM_TOKEN, use_context=True)
+        dispatcher = updater.dispatcher
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', start)],
+            states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
+            fallbacks=[CommandHandler('start', start)],
+        )
+        dispatcher.add_handler(conv_handler)
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
+        dispatcher.add_error_handler(error_handler)
+        updater.start_polling()
+        logger.info("Telegram botu arka planda polling modunda başlatıldı.")
+        updater.idle()
+    except Exception as e:
+        # Bot thread'inde oluşabilecek herhangi bir kritik hatayı yakala ve logla.
+        # Bu, thread'in sessizce ölmesini engeller ve hatayı görünür kılar.
+        logger.exception("Bot thread'inde yakalanamayan bir istisna oluştu ve thread sonlandırıldı.")
 
 # --- UYGULAMAYI BAŞLATMA ---
 # Gunicorn bu dosyayı import ettiğinde, aşağıdaki kodlar çalışacak ve
