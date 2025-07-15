@@ -189,11 +189,7 @@ def webhook():
         dispatcher.process_update(update)
     return '', 204
 
-def main():
-    if not updater or not dispatcher:
-        logger.critical("Updater veya dispatcher başlatılamadı.")
-        return
-
+if updater and dispatcher:
     load_translations()
 
     conv_handler = ConversationHandler(
@@ -205,17 +201,15 @@ def main():
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
     dispatcher.add_error_handler(error_handler)
 
-    port = int(os.environ.get('PORT', 8080))
     deploy_url = os.environ.get("DEPLOY_URL")
-
     if deploy_url:
         logger.info(f"Webhook'u {deploy_url} adresine ayarlıyor...")
         updater.bot.set_webhook(url=f"{deploy_url}/{TELEGRAM_TOKEN}")
-        app.run(host='0.0.0.0', port=port, debug=False)
     else:
-        logger.info("DEPLOY_URL ayarlanmamış, polling moduna geçiliyor...")
-        updater.start_polling()
-        updater.idle()
+        logger.info("DEPLOY_URL ayarlanmamış, geliştirme için polling moduna geçiliyor...")
+        # Geliştirme sırasında polling kullanmak için ayrı bir thread'de çalıştırın
+        threading.Thread(target=lambda: updater.start_polling()).start()
 
 if __name__ == '__main__':
-    main()
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
