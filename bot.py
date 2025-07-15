@@ -259,60 +259,72 @@ def webhook():
         logger.error(f"Webhook hatası: {e}")
         return 'Error', 500
 
-def run_bot():
-    """Bot'u arka planda çalıştır"""
+def setup_bot(is_webhook: bool):
+    """Botun handler'larını ve webhook'unu kurar."""
     if not updater or not dispatcher:
-        logger.error("Bot başlatılamadı - token eksik")
+        logger.error("Bot başlatılamadı - updater veya dispatcher eksik.")
         return
-    
+
     # Çeviri dosyalarını yükle
     load_translations()
-    
-    # Handler'ları ekle
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
-        fallbacks=[CommandHandler('start', start)],
-    )
-    
-    dispatcher.add_handler(conv_handler)
-    dispatcher.add_handler(
-        MessageHandler(
-            Filters.text & ~Filters.command & 
-            Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), 
-            link_handler
-        )
-    )
-    dispatcher.add_error_handler(error_handler)
-    
-    # Webhook kurulum
-    deploy_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("DEPLOY_URL")
-    
-    if deploy_url:
-        logger.info(f"Webhook'u {deploy_url} adresine ayarlıyor...")
-        try:
-            # Mevcut webhook'u temizle
-            updater.bot.delete_webhook()
-            time.sleep(1)
-            # Yeni webhook'u ayarla
-            updater.bot.set_webhook(url=f"{deploy_url}/{TELEGRAM_TOKEN}")
-            logger.info("Webhook başarıyla ayarlandı")
-        except Exception as e:
-            logger.error(f"Webhook ayarlanırken hata: {e}")
-    else:
-        logger.info("Deploy URL bulunamadı, polling modu aktif")
-        updater.start_polling()
 
+    # Handler'ları sadece bir kere ekle
+    if not dispatcher.handlers:
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', start)],
+            states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
+            fallbacks=[CommandHandler('start', start)],
+        )
+        dispatcher.add_handler(conv_handler)
+        dispatcher.add_handler(
+            MessageHandler(
+                Filters.text & ~Filters.command &
+                Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'),
+                link_handler
+            )
+        )
+        dispatcher.add_error_handler(error_handler)
+        logger.info("Bot handler'ları eklendi.")
+
+    if is_webhook:
+        deploy_url = os.environ.get("RENDER_EXTERNAL_URL")
+        if deploy_url:
+            webhook_url = f"{deploy_url}/{TELEGRAM_TOKEN}"
+            logger.info(f"Webhook {webhook_url} adresine ayarlanıyor...")
+            try:
+                # Mevcut webhook'u al ve karşılaştır
+                current_webhook_info = updater.bot.get_webhook_info()
+                if current_webhook_info.url != webhook_url:
+                    updater.bot.delete_webhook()
+                    time.sleep(0.5)
+                    success = updater.bot.set_webhook(url=webhook_url)
+                    if success:
+                        logger.info("Webhook başarıyla ayarlandı.")
+                    else:
+                        logger.error("Webhook ayarlanamadı. set_webhook 'False' döndürdü.")
+                else:
+                    logger.info("Webhook zaten doğru şekilde ayarlanmış.")
+            except Exception as e:
+                logger.error(f"Webhook ayarlanırken kritik bir hata oluştu: {e}", exc_info=True)
+        else:
+            logger.warning("RENDER_EXTERNAL_URL ortam değişkeni bulunamadı. Webhook ayarlanamadı.")
+
+# --- UYGULAMA BAŞLANGICI ---
+# Bu kısım, dosya Gunicorn tarafından içe aktarıldığında veya doğrudan çalıştırıldığında çalışır.
+if TELEGRAM_TOKEN and updater:
+    # Gunicorn ile çalışıyorsak (yani __name__ != '__main__'), webhook modunda kur.
+    # Aksi takdirde, yerel geliştirme için webhook'suz kur.
+    setup_bot(is_webhook=(__name__ != '__main__'))
+
+# --- YEREL GELİŞTİRME SUNUCUSU ---
+# Bu blok sadece dosyayı doğrudan `python bot.py` komutuyla çalıştırdığınızda devreye girer.
 if __name__ == '__main__':
-    if TELEGRAM_TOKEN:
-        # Bot'u arka planda başlat
-        bot_thread = threading.Thread(target=run_bot)
-        bot_thread.daemon = True
-        bot_thread.start()
-        
-        # Flask'ı başlat
-        port = int(os.environ.get('PORT', 8080))
-        logger.info(f"Flask sunucusu port {port} üzerinde başlatılıyor...")
-        app.run(host='0.0.0.0', port=port, debug=False)
+    logger.info("Yerel geliştirme modu aktif. Polling başlatılıyor...")
+    if updater:
+        # Flask'ı bir thread'de çalıştırarak yerel testleri kolaylaştırabiliriz (isteğe bağlı)
+        # Ama bu bot için öncelikli olan polling.
+        updater.start_polling()
+        logger.info("Bot polling ile çalışıyor. Çıkmak için CTRL+C.")
+        updater.idle()
     else:
-        logger.critical("TELEGRAM_TOKEN bulunamadı!")
+        logger.critical("TELEGRAM_TOKEN bulunamadı, bot başlatılamıyor.")
