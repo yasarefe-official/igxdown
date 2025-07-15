@@ -172,14 +172,20 @@ def error_handler(update: Update, context: CallbackContext):
         user_lang = get_user_language(update)
         update.effective_message.reply_text(get_translation(user_lang, "error_generic"))
 
-def run_telegram_bot():
-    try:
-        if not TELEGRAM_TOKEN:
-            logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot thread'i başlatılamıyor.")
-            return
+@app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
+def webhook(update: Update):
+    # Gelen güncellemeyi işle
+    dispatcher.process_update(update)
+    return '', 204
+
+if __name__ == '__main__':
+    if not TELEGRAM_TOKEN:
+        logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot başlatılamıyor.")
+    else:
         load_translations()
         updater = Updater(TELEGRAM_TOKEN, use_context=True)
         dispatcher = updater.dispatcher
+
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
@@ -188,18 +194,18 @@ def run_telegram_bot():
         dispatcher.add_handler(conv_handler)
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
         dispatcher.add_error_handler(error_handler)
-        updater.start_polling()
-        logger.info("Telegram botu arka planda polling modunda başlatıldı.")
-        while updater.running:
-            time.sleep(5)
-        logger.info("Bot polling döngüsü sonlandı.")
-    except Exception as e:
-        logger.exception("Bot thread'inde yakalanamayan bir istisna oluştu ve thread sonlandırıldı.")
 
-bot_thread = threading.Thread(target=run_telegram_bot)
-bot_thread.daemon = True
-bot_thread.start()
+        port = int(os.environ.get('PORT', 8080))
+        deploy_url = os.environ.get("DEPLOY_URL")
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
+        if deploy_url:
+            logger.info(f"Webhook'u {deploy_url} adresinde {port} portu üzerinden ayarlıyor...")
+            updater.start_webhook(listen="0.0.0.0",
+                                  port=port,
+                                  url_path=TELEGRAM_TOKEN,
+                                  webhook_url=f"{deploy_url}/{TELEGRAM_TOKEN}")
+            app.run(host='0.0.0.0', port=port, debug=False)
+        else:
+            logger.info("DEPLOY_URL ayarlanmamış, polling moduna geçiliyor...")
+            updater.start_polling()
+            updater.idle()
