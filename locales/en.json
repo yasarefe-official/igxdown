@@ -9,5 +9,6 @@
   "error_forbidden": "There was a problem accessing Instagram (Access Forbidden). Please try again later.",
   "error_yt_dlp": "A problem was encountered while downloading the video. Please check the link or try again later.",
   "error_timeout": "The video download process timed out as it took too long.",
+  "error_file_too_large": "The video file is too large (50MB limit). Please try a smaller video.",
   "error_generic": "An unexpected error occurred during the process. Please try again later."
 }
