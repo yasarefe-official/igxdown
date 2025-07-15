@@ -8,7 +8,7 @@ import json
 import glob
 import threading
 
-from flask import Flask
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters, CallbackContext,
@@ -173,8 +173,9 @@ def error_handler(update: Update, context: CallbackContext):
         update.effective_message.reply_text(get_translation(user_lang, "error_generic"))
 
 @app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
-def webhook(update: Update):
+def webhook():
     # Gelen güncellemeyi işle
+    update = Update.de_json(request.get_json(force=True), updater.bot)
     dispatcher.process_update(update)
     return '', 204
 
@@ -199,11 +200,8 @@ if __name__ == '__main__':
         deploy_url = os.environ.get("DEPLOY_URL")
 
         if deploy_url:
-            logger.info(f"Webhook'u {deploy_url} adresinde {port} portu üzerinden ayarlıyor...")
-            updater.start_webhook(listen="0.0.0.0",
-                                  port=port,
-                                  url_path=TELEGRAM_TOKEN,
-                                  webhook_url=f"{deploy_url}/{TELEGRAM_TOKEN}")
+            logger.info(f"Webhook'u {deploy_url} adresine ayarlıyor...")
+            updater.bot.set_webhook(url=f"{deploy_url}/{TELEGRAM_TOKEN}")
             app.run(host='0.0.0.0', port=port, debug=False)
         else:
             logger.info("DEPLOY_URL ayarlanmamış, polling moduna geçiliyor...")
