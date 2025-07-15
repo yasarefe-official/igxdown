@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 # --- FLASK UYGULAMASI ---
 app = Flask(__name__)
 
+# --- BOT AYARLARI ---
+if not TELEGRAM_TOKEN:
+    logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot başlatılamıyor.")
+    updater = None
+    dispatcher = None
+else:
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
+
 @app.route('/')
 def index():
     return "Bot is running!", 200
@@ -176,34 +185,37 @@ def error_handler(update: Update, context: CallbackContext):
 def webhook():
     # Gelen güncellemeyi işle
     update = Update.de_json(request.get_json(force=True), updater.bot)
-    dispatcher.process_update(update)
+    if dispatcher:
+        dispatcher.process_update(update)
     return '', 204
 
-if __name__ == '__main__':
-    if not TELEGRAM_TOKEN:
-        logger.critical("TELEGRAM_TOKEN ortam değişkeni bulunamadı. Bot başlatılamıyor.")
+def main():
+    if not updater or not dispatcher:
+        logger.critical("Updater veya dispatcher başlatılamadı.")
+        return
+
+    load_translations()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
+        fallbacks=[CommandHandler('start', start)],
+    )
+    dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
+    dispatcher.add_error_handler(error_handler)
+
+    port = int(os.environ.get('PORT', 8080))
+    deploy_url = os.environ.get("DEPLOY_URL")
+
+    if deploy_url:
+        logger.info(f"Webhook'u {deploy_url} adresine ayarlıyor...")
+        updater.bot.set_webhook(url=f"{deploy_url}/{TELEGRAM_TOKEN}")
+        app.run(host='0.0.0.0', port=port, debug=False)
     else:
-        load_translations()
-        updater = Updater(TELEGRAM_TOKEN, use_context=True)
-        dispatcher = updater.dispatcher
+        logger.info("DEPLOY_URL ayarlanmamış, polling moduna geçiliyor...")
+        updater.start_polling()
+        updater.idle()
 
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', start)],
-            states={SELECTING_LANGUAGE: [CallbackQueryHandler(language_button)]},
-            fallbacks=[CommandHandler('start', start)],
-        )
-        dispatcher.add_handler(conv_handler)
-        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command & Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'), link_handler))
-        dispatcher.add_error_handler(error_handler)
-
-        port = int(os.environ.get('PORT', 8080))
-        deploy_url = os.environ.get("DEPLOY_URL")
-
-        if deploy_url:
-            logger.info(f"Webhook'u {deploy_url} adresine ayarlıyor...")
-            updater.bot.set_webhook(url=f"{deploy_url}/{TELEGRAM_TOKEN}")
-            app.run(host='0.0.0.0', port=port, debug=False)
-        else:
-            logger.info("DEPLOY_URL ayarlanmamış, polling moduna geçiliyor...")
-            updater.start_polling()
-            updater.idle()
+if __name__ == '__main__':
+    main()
