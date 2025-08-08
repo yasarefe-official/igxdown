@@ -10,5 +10,6 @@
   "error_yt_dlp": "Video indirilirken bir sorunla karşılaşıldı. Lütfen linki kontrol edin veya daha sonra tekrar deneyin.",
   "error_timeout": "Video indirme işlemi çok uzun sürdüğü için zaman aşımına uğradı.",
   "error_file_too_large": "Video dosyası çok büyük (50MB sınırı). Lütfen daha küçük bir video deneyin.",
-  "error_generic": "İşlem sırasında beklenmedik bir sorun oluştu. Lütfen daha sonra tekrar deneyin."
+  "error_generic": "İşlem sırasında beklenmedik bir sorun oluştu. Lütfen daha sonra tekrar deneyin.",
+  "unsupported_message": "Sadece Instagram video/Reel linklerini destekliyorum. Lütfen geçerli bir link gönderin."
 }

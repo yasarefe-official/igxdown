@@ -245,6 +245,11 @@ def error_handler(update: Update, context: CallbackContext):
         user_lang = get_user_language(update)
         update.effective_message.reply_text(get_translation(user_lang, "error_generic"))
 
+def unsupported_message_handler(update: Update, context: CallbackContext):
+    """Handles any message that is not a command or a supported link."""
+    user_lang = get_user_language(update)
+    update.message.reply_text(get_translation(user_lang, "unsupported_message"))
+
 # Webhook endpoint
 @app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
 def webhook():
@@ -276,11 +281,20 @@ def setup_bot(is_webhook: bool):
             fallbacks=[CommandHandler('start', start)],
         )
         dispatcher.add_handler(conv_handler)
+        # Instagram link handler
         dispatcher.add_handler(
             MessageHandler(
                 Filters.text & ~Filters.command &
-                Filters.regex(r'https?://www\.instagram\.com/(p|reel|tv|stories)/\S+'),
+                Filters.regex(r'https?://(www\.)?instagram\.com/\S+'),
                 link_handler
+            )
+        )
+
+        # Fallback handler for any other text message
+        dispatcher.add_handler(
+            MessageHandler(
+                Filters.text & ~Filters.command,
+                unsupported_message_handler
             )
         )
         dispatcher.add_error_handler(error_handler)
