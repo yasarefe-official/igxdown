@@ -301,14 +301,21 @@ def setup_bot(is_webhook: bool):
         logger.info("Bot handler'ları eklendi.")
 
     if is_webhook:
-        deploy_url = os.environ.get("RENDER_EXTERNAL_URL")
-        if deploy_url:
+        # Vercel veya Render gibi platformlar için URL'yi al
+        deploy_url = os.environ.get("VERCEL_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+
+        if deploy_url and TELEGRAM_TOKEN:
+            # VERCEL_URL 'https' içermiyorsa ekle
+            if not deploy_url.startswith("https://"):
+                deploy_url = f"https://{deploy_url}"
+
             webhook_url = f"{deploy_url}/{TELEGRAM_TOKEN}"
+
             logger.info(f"Webhook {webhook_url} adresine ayarlanıyor...")
             try:
-                # Mevcut webhook'u al ve karşılaştır
                 current_webhook_info = updater.bot.get_webhook_info()
                 if current_webhook_info.url != webhook_url:
+                    # Mevcut webhook'u sil ve yenisini ayarla
                     updater.bot.delete_webhook()
                     time.sleep(0.5)
                     success = updater.bot.set_webhook(url=webhook_url)
@@ -321,14 +328,15 @@ def setup_bot(is_webhook: bool):
             except Exception as e:
                 logger.error(f"Webhook ayarlanırken kritik bir hata oluştu: {e}", exc_info=True)
         else:
-            logger.warning("RENDER_EXTERNAL_URL ortam değişkeni bulunamadı. Webhook ayarlanamadı.")
+            logger.warning("Dağıtım URL'si veya TELEGRAM_TOKEN bulunamadı. Webhook ayarlanamadı.")
 
 # --- UYGULAMA BAŞLANGICI ---
-# Bu kısım, dosya Gunicorn tarafından içe aktarıldığında veya doğrudan çalıştırıldığında çalışır.
+# Bu kısım, dosya Gunicorn/Vercel tarafından içe aktarıldığında veya doğrudan çalıştırıldığında çalışır.
 if TELEGRAM_TOKEN and updater:
-    # Gunicorn ile çalışıyorsak (yani __name__ != '__main__'), webhook modunda kur.
-    # Aksi takdirde, yerel geliştirme için webhook'suz kur.
-    setup_bot(is_webhook=(__name__ != '__main__'))
+    # __name__ != '__main__' Gunicorn veya Vercel gibi ortamlarda True olur.
+    # VERCEL_URL ortam değişkeninin varlığı da bir üretim ortamı olduğunu gösterir.
+    is_production = __name__ != '__main__' or "VERCEL_URL" in os.environ
+    setup_bot(is_webhook=is_production)
 
 # --- YEREL GELİŞTİRME SUNUCUSU ---
 # Bu blok sadece dosyayı doğrudan `python bot.py` komutuyla çalıştırdığınızda devreye girer.

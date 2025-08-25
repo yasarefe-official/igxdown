@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "bot.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "45mb",
+        "buildCommand": "bash build.sh"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "bot.py"
+    }
+  ]
+}
