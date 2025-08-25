@@ -79,7 +79,8 @@ def get_translation(lang_code, key, **kwargs):
 def create_cookie_file(session_id_value: str, user_id: str) -> str:
     if not session_id_value: 
         return None
-    cookie_file_path = f"temp_cookie_{user_id}_{uuid4()}.txt"
+    # Sunucusuz ortamlar (Vercel vb.) için geçici dosyalar /tmp dizinine yazılmalıdır.
+    cookie_file_path = f"/tmp/temp_cookie_{user_id}_{uuid4()}.txt"
     header = "# Netscape HTTP Cookie File\n# http://www.netscape.com/newsref/std/cookie_spec.html\n# This is a generated file!  Do not edit.\n\n"
     expiration_timestamp = int(time.time()) + (10 * 365 * 24 * 60 * 60)
     cookie_line = f".instagram.com\tTRUE\t/\tTRUE\t{expiration_timestamp}\tsessionid\t{session_id_value}\n"
@@ -141,7 +142,8 @@ def link_handler(update: Update, context: CallbackContext):
     )
 
     cookie_file = create_cookie_file(SESSION_ID, user_id) if SESSION_ID else None
-    download_dir = f"temp_dl_{user_id}_{uuid4()}"
+    # Sunucusuz ortamlar (Vercel vb.) için geçici dosyalar /tmp dizinine yazılmalıdır.
+    download_dir = f"/tmp/temp_dl_{user_id}_{uuid4()}"
     os.makedirs(download_dir, exist_ok=True)
 
     yt_dlp_command = [
